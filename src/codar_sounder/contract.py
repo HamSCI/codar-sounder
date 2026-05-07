@@ -1,6 +1,6 @@
-"""Sigmond client contract v0.5 — inventory and validate JSON builders.
+"""Sigmond client contract v0.6 — inventory and validate JSON builders.
 
-Contract layout (sigmond/docs/CONTRACT-v0.5-DRAFT.md):
+Contract layout (sigmond/docs/CLIENT-CONTRACT.md):
 
   §3   inventory --json — per-instance resource view
   §4   stdout cleanliness
@@ -8,11 +8,13 @@ Contract layout (sigmond/docs/CONTRACT-v0.5-DRAFT.md):
   §12  validate --json — config validation
   §14  configuration interview — config init/edit
   §15  radiod channel contributions ([[radiod.fragment]])
+  §17  output sinks — data_sinks array per instance (file/clickhouse)
 """
 
 from __future__ import annotations
 
 import logging
+import os
 from importlib.metadata import version as pkg_version
 from pathlib import Path
 from typing import Any
@@ -26,7 +28,7 @@ from codar_sounder.config import (
 from codar_sounder.version import GIT_INFO
 
 
-CONTRACT_VERSION = "0.5"
+CONTRACT_VERSION = "0.6"
 
 
 def _client_version() -> str:
@@ -58,6 +60,30 @@ def build_inventory(config: dict, config_path: Path) -> dict:
         for tx in transmitters(block):
             tx_id = tx.get("id", "<unnamed>")
             freq = int(tx.get("center_freq_hz", 0))
+
+            # CONTRACT v0.6 §17 — output sinks per instance.  JSONL
+            # spool is the canonical L1 artefact (Kaeppler-compatible
+            # Zenodo schema); the CH sink is added when sigmond has
+            # published SIGMOND_CLICKHOUSE_URL into the env.
+            data_sinks: list[dict[str, Any]] = [
+                {
+                    "kind":           "file",
+                    "target":         f"{output_dir}/{radiod_id}/{tx_id}",
+                    "schema_ref":     None,
+                    "retention_days": 365,
+                    "mb_per_day":     5,
+                },
+            ]
+            if os.environ.get("SIGMOND_CLICKHOUSE_URL", "").strip():
+                data_sinks.append({
+                    "kind":           "clickhouse",
+                    "target":         "codar.spots",
+                    "schema_ref":     "codar:1",
+                    "retention_days": 90,
+                    "mb_per_day":     1,        # ~1 row/min/peak; tiny
+                    "health":         "ok",
+                })
+
             instance: dict[str, Any] = {
                 "instance": tx_id,
                 "radiod_id": radiod_id,
@@ -68,13 +94,7 @@ def build_inventory(config: dict, config_path: Path) -> dict:
                 "ka9q_channels": 0,             # we share one channel across TXs
                 "required_cores": [],
                 "preferred_cores": "worker",
-                "disk_writes": [
-                    {
-                        "path": f"{output_dir}/{radiod_id}/{tx_id}",
-                        "mb_per_day": 5,
-                        "retention_days": 365,
-                    }
-                ],
+                "data_sinks": data_sinks,
                 "uses_timing_calibration": False,
                 "provides_timing_calibration": False,
             }
@@ -106,7 +126,7 @@ def build_inventory(config: dict, config_path: Path) -> dict:
     payload["instances"] = instances
     payload["deps"] = {
         "pypi": [
-            {"name": "ka9q-python", "version": ">=3.8.0"},
+            {"name": "ka9q-python", "version": ">=3.11.0"},
             {"name": "numpy", "version": ">=1.24.0"},
         ],
     }

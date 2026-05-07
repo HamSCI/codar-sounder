@@ -77,7 +77,7 @@ class TestInventory:
         assert self.data["client"] == "codar-sounder"
 
     def test_contract_version(self):
-        assert self.data["contract_version"] == "0.5"
+        assert self.data["contract_version"] == "0.6"
 
     def test_has_config_path(self):
         assert "config_path" in self.data
@@ -94,8 +94,24 @@ class TestInventory:
     def test_instance_fields(self):
         inst = self.data["instances"][0]
         for required in ("instance", "radiod_id", "host", "frequencies_hz",
-                         "ka9q_channels", "disk_writes"):
+                         "ka9q_channels", "data_sinks"):
             assert required in inst, f"missing {required}"
+
+    def test_data_sinks_v0_6(self):
+        """CONTRACT v0.6 §17.3: each instance has a data_sinks array.
+
+        Without SIGMOND_CLICKHOUSE_URL set, only file sinks appear.
+        """
+        for inst in self.data["instances"]:
+            sinks = inst["data_sinks"]
+            assert isinstance(sinks, list) and sinks
+            kinds = {s["kind"] for s in sinks}
+            assert "file" in kinds
+            # CH sink is env-gated; tests run without CH so it's absent.
+            assert "clickhouse" not in kinds
+            for sink in sinks:
+                for key in ("kind", "target", "retention_days", "mb_per_day"):
+                    assert key in sink, f"sink missing {key}"
 
     def test_instance_ids_are_station_codes(self):
         ids = {inst["instance"] for inst in self.data["instances"]}

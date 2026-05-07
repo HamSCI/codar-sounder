@@ -99,6 +99,14 @@ def main():
                         help="Minimum SNR for a peak to be reported")
     p_tdma.add_argument("--json", action="store_true",
                         help="Emit JSON instead of human-readable output")
+    p_tdma.add_argument(
+        "--write-config", action="store_true",
+        help="Persist discovered tdma_offset_samples back into the config "
+             "TOML, in-place per [[radiod.transmitter]] block.  Existing "
+             "comments and formatting outside the touched lines are "
+             "preserved.  Use this only after eyeballing the discovered "
+             "SNRs (typical TDMA peaks are 20–40 dB; 5 dB is noise).",
+    )
     _common(p_tdma)
 
     p_cfg = sub.add_parser("config", help="Configure codar-sounder")
@@ -378,6 +386,30 @@ def _handle_tdma_scan(args):
             print(
                 f"  {tx_id}: D={D:.0f} km → tdma_offset_samples={offset}"
             )
+
+    if args.write_config:
+        # Persist offsets back to the config TOML (operator-supplied
+        # opt-in; default is to print only).  Only TXs with non-None
+        # discovered offsets are written.
+        offsets_to_write = {
+            tx_id: off for tx_id, off in tdma_offsets.items()
+            if off is not None
+        }
+        if not offsets_to_write:
+            print("\n--write-config: no offsets discovered, leaving config unchanged",
+                  file=sys.stderr)
+            return
+        from codar_sounder.tdma_config_writer import update_tdma_offsets_in_toml
+        config_path = _resolved_config_path(args)
+        radiod_id = block.get("id", "")
+        n_changed, n_inserted = update_tdma_offsets_in_toml(
+            config_path, radiod_id, offsets_to_write,
+        )
+        print(
+            f"\n--write-config: updated {config_path} "
+            f"({n_changed} replaced, {n_inserted} inserted)",
+            file=sys.stderr,
+        )
 
 
 def _handle_config(args):

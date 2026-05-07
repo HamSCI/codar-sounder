@@ -88,3 +88,74 @@ present (falling back to 0 = v0.2 behaviour when absent).
   drift model — TXs are GPS-locked, drift is negligible.
 - HFRNet TDMA-table import.  Self-discovery is sufficient and avoids an
   external-data dependency.
+
+
+## v0.4.0 — multi-peak + layer classification + CH sink (2026-05-07)
+
+Closes the v0.3 "deferred to v0.4" list except the cross-loop AOA item,
+which stays out until a second antenna is procured.
+
+### Tasks
+
+- [x] `core/stream.py` — wire ka9q-python ≥3.11 `low_edge`/`high_edge`
+      kwargs into `RadiodIQSource.ensure_channel`.  Default ±sample_rate/2
+      ∓ 1500 Hz guard.  Optional override via constructor kwargs (kept
+      out of config until field SNRs prove a per-station tightness is
+      worth the knob).  Bumped ka9q-python pin to >=3.11.0.
+- [x] `core/trace.py` — `find_f_region_peaks` (plural).  Local-max
+      scan with SNR threshold + minimum-separation collapse; sorted
+      by SNR descending; capped at `max_peaks` (default 4).  The old
+      singular `find_f_region_peak` becomes a thin wrapper for
+      backwards compat.
+- [x] `core/invert.py` — `classify_layer(virtual_height_km)` returns
+      one of `E`/`F1`/`F2`/`F2_extreme`/`below_E`/`unknown` per Davies
+      (1990) digisonde altitudes.  `IonosphericFix` gains a
+      `mode_layer` field set automatically by `invert()`.
+- [x] `core/output.py` JSONL — adds `peak_index`, `peak_count`,
+      `mode_layer` fields per record.
+- [x] `core/daemon.py` `process_cpi` — emits one record per peak (was:
+      single argmax peak); shared per-radiod CH writer initialised
+      from `sigmond.hamsci_ch.Writer.from_env`; per-peak CH inserts
+      run alongside the JSONL writes.  CH path failure is non-fatal.
+- [x] `clickhouse/schema/codar/{000,001}_*.sql` — greenfield `codar`
+      database; `codar.spots` is ReplacingMergeTree, monthly-partitioned,
+      ORDER BY `(host_call, station_id, time, peak_index)`.
+- [x] `deploy.toml` — bumped contract_version to `0.6`, version to
+      `0.4.0`, added `[clickhouse]` block referencing
+      `clickhouse/schema/codar`.
+- [x] `contract.py` — bumped CONTRACT_VERSION to `0.6`; replaced
+      `disk_writes` with `data_sinks` (file always; clickhouse appears
+      when `SIGMOND_CLICKHOUSE_URL` is set).
+- [x] `cli.py` `tdma-scan --write-config` — atomic in-place TOML edit
+      that persists discovered offsets, replacing existing
+      `tdma_offset_samples` lines or inserting new ones after the
+      matching `id = "..."`.  Comments and unrelated formatting
+      preserved.
+- [x] Tests:
+      - `test_stream.py` — 6 tests on filter-edge defaulting.
+      - `test_multi_peak.py` — 25 tests covering `classify_layer`,
+        `find_f_region_peaks`, per-peak CH row builder, end-to-end
+        synthetic CPI emission to a fake CH writer.
+      - `test_tdma_config_writer.py` — 9 tests on the in-place
+        TOML rewriter (replace + insert + atomic-write + scope).
+
+### Out of scope (still / again)
+
+- **Cross-loop / crossed-dipole AOA** — needs a second physical antenna.
+  Owner has only one; revisit when a second antenna arrives.
+- **Dynamic TDMA re-lock** — confirmed unnecessary: CODAR TXs are
+  GPS-disciplined, drift is negligible at the timescales we care about.
+- **Auto-promoted TDMA offsets at daemon startup** — the field-test
+  retro called this risky without operator review.  v0.4 adds
+  `--write-config` so the operator can promote in one keystroke after
+  eyeballing SNRs (typical real TDMA peaks are 20–40 dB; 5 dB is noise).
+- **HFRNet table import** — self-discovery is sufficient; an
+  external-data dependency would be a regression.
+
+### Verification status
+
+Unit tests: 158 passed locally (was 117 in v0.3.2; +41 new).  Live
+verification on bee1-rx888 with the wideband filter: TBD post-deploy.
+Expected: SNRs that were 5 dB on the 4.5 MHz band in v0.3 should rise
+to 20+ dB now that the chirp is no longer being truncated by the
+default ±5 kHz audio filter.

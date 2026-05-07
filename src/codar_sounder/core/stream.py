@@ -172,6 +172,9 @@ class RadiodIQSource:
         center_freq_hz: float,
         preset: str = "iq",
         lifetime_frames: Optional[int] = None,
+        filter_low_edge_hz: Optional[float] = None,
+        filter_high_edge_hz: Optional[float] = None,
+        filter_guard_hz: float = 1500.0,
     ):
         import queue as _q                   # stdlib
 
@@ -188,6 +191,23 @@ class RadiodIQSource:
         # channel auto-destructs if the daemon dies.  None = leave the
         # channel infinite (v0.3 and earlier behaviour).
         self.lifetime_frames = lifetime_frames
+        # Channel filter (ka9q-python ≥3.11.0).  CODAR chirps span tens
+        # of kHz — far wider than the `iq` preset's default ±5 kHz audio
+        # filter.  Without an explicit filter, the receiver truncates
+        # the chirp's edges and the dechirped range bins smear.  Default
+        # to a near-Nyquist filter (matches the hfdl-recorder pattern in
+        # daemon.py:97) so the captured IQ spans the full sample-rate
+        # bandwidth; the dechirp's matched-filter then concentrates
+        # signal energy and rejects out-of-band noise downstream.
+        self._filter_guard_hz = float(filter_guard_hz)
+        self._filter_low_edge_hz = (
+            float(filter_low_edge_hz) if filter_low_edge_hz is not None
+            else -self.sample_rate_hz / 2 + self._filter_guard_hz
+        )
+        self._filter_high_edge_hz = (
+            float(filter_high_edge_hz) if filter_high_edge_hz is not None
+            else +self.sample_rate_hz / 2 - self._filter_guard_hz
+        )
         self._control = None
         self._stream = None
         self._channel_info = None
@@ -253,11 +273,13 @@ class RadiodIQSource:
     def __iter__(self) -> Iterator[np.ndarray]:
         log.info(
             "RadiodIQSource: provisioning channel on %s freq=%d Hz "
-            "preset=%s sample_rate=%d Hz encoding=F32LE",
+            "preset=%s sample_rate=%d Hz encoding=F32LE filter=[%.0f,%.0f] Hz",
             self.radiod_status_dns,
             int(self.center_freq_hz),
             self.preset,
             int(self.sample_rate_hz),
+            self._filter_low_edge_hz,
+            self._filter_high_edge_hz,
         )
         self._control = _ka9q_RadiodControl(self.radiod_status_dns)  # type: ignore[name-defined]
         # Force F32LE (encoding=4) IQ.  ka9q-python's default (S16BE)
@@ -272,6 +294,8 @@ class RadiodIQSource:
             preset=self.preset,
             sample_rate=int(self.sample_rate_hz),
             encoding=4,            # F32LE
+            low_edge=self._filter_low_edge_hz,
+            high_edge=self._filter_high_edge_hz,
         )
         # Pass `lifetime` only when we have one — older ka9q-python without
         # the keep-alive feature would reject the unknown kwarg.
@@ -353,6 +377,9 @@ def make_iq_source(
     fallback_target_group_range_km: float = 500.0,
     force_synthetic: bool = False,
     lifetime_frames: Optional[int] = None,
+    filter_low_edge_hz: Optional[float] = None,
+    filter_high_edge_hz: Optional[float] = None,
+    filter_guard_hz: float = 1500.0,
 ):
     """Construct an IQ source, falling back to synthetic if radiod isn't available.
 
@@ -370,6 +397,9 @@ def make_iq_source(
                 center_freq_hz=center_freq_hz,
                 preset=preset,
                 lifetime_frames=lifetime_frames,
+                filter_low_edge_hz=filter_low_edge_hz,
+                filter_high_edge_hz=filter_high_edge_hz,
+                filter_guard_hz=filter_guard_hz,
             )
         except ModuleNotFoundError as exc:
             log.warning(

@@ -1,26 +1,37 @@
-"""Sounder daemon — v0.2.
+"""Sounder daemon — v0.4.
 
-End-to-end pipeline for one (radiod, CODAR-transmitter) pair:
+End-to-end pipeline.  One ``SounderDaemon`` per radiod, fanning each
+CPI out across every configured ``[[radiod.transmitter]]``:
 
-    radiod IQ channel
+    radiod IQ channel (one subscription per radiod)
         ↓ ka9q-python RadiodStream (or synthetic fallback)
     contiguous CPI of complex64 samples
-        ↓ core.dechirp
-    range-Doppler matrix
-        ↓ core.dechirp.range_profile + positive_range_window
-    range profile (positive ranges only)
-        ↓ core.trace.find_f_region_peak (with ground-clutter mask)
-    F-region peak (group_range, snr) — or None
-        ↓ core.invert.invert
-    IonosphericFix (virtual_height, equivalent_vertical_freq, uncertainty)
-        ↓ core.output.JsonlWriter
-    /var/lib/codar-sounder/<radiod>/<station>/<YYYY>/<MM>/<DD>.jsonl
+        ↓ per-transmitter pipeline:
+            ↓ core.dechirp (replica matched to this TX's sweep)
+        range-Doppler matrix
+            ↓ core.dechirp.range_profile + positive_range_window
+        range profile (positive ranges only)
+            ↓ core.trace.find_f_region_peaks  (with ground-clutter mask)
+        list[TraceDetection] — every local maximum above SNR threshold,
+                              up to ``max_peaks`` (default 4) per CPI,
+                              sorted SNR-descending
+            ↓ for each peak:
+                ↓ core.invert.invert  (with classify_layer)
+            IonosphericFix (virtual_height, fv, uncertainty, mode_layer)
+                ↓ JSONL: core.output.JsonlWriter (canonical L1 artefact,
+                  Kaeppler-compatible Zenodo schema; one record per peak)
+                ↓ ClickHouse (CONTRACT v0.6 §17, additive when configured):
+                  sigmond.hamsci_ch.Writer → codar.spots, one row per peak
 
-One ``SounderDaemon`` instance per (radiod, transmitter) pair.  The
-daemon's ``run()`` loop is a thin orchestrator: receive CPI, dechirp,
-detect, invert, write.  Per-CPI failures (no peak detected, low SNR,
-unphysical geometry) emit a warning and continue — never crash the
-service.
+Per-CPI failures (no peak detected, low SNR, unphysical geometry on
+one of several peaks, CH unreachable) emit a warning and continue —
+never crash the service.  The CH path failing never blocks JSONL.
+
+JSONL output layout:
+    /var/lib/codar-sounder/<radiod>/<station>/<YYYY>/<MM>/<DD>.jsonl
+    one record per detected peak, ranked by ``peak_index`` /
+    ``peak_count`` so a downstream consumer can regroup peaks back into
+    their parent CPI.
 """
 
 from __future__ import annotations
@@ -39,7 +50,11 @@ from codar_sounder.core.dechirp import dechirp, positive_range_window, range_pro
 from codar_sounder.core.invert import invert, group_range_resolution_km
 from codar_sounder.core.output import JsonlWriter
 from codar_sounder.core.stream import make_iq_source
-from codar_sounder.core.trace import GroundClutterMask, find_f_region_peak
+from codar_sounder.core.trace import (
+    DEFAULT_MAX_PEAKS,
+    GroundClutterMask,
+    find_f_region_peaks,
+)
 
 log = logging.getLogger(__name__)
 
@@ -81,6 +96,11 @@ class _TransmitterPipeline:
         range_max_km: float,
         snr_threshold_db: float,
         clutter_window: int = 20,
+        max_peaks_per_cpi: int = DEFAULT_MAX_PEAKS,
+        ch_writer=None,
+        host_call: str = "",
+        host_grid: str = "",
+        processing_version: str = "",
     ):
         self.station_id = tx_config["id"]
         self.tx_config = tx_config
@@ -107,6 +127,15 @@ class _TransmitterPipeline:
         self.range_min_km = range_min_km
         self.range_max_km = range_max_km
         self.snr_threshold_db = snr_threshold_db
+        self.max_peaks_per_cpi = max_peaks_per_cpi
+        # Optional second sink for CONTRACT v0.6 §17 — local CH staging
+        # tier.  When present, each per-peak record is also written to
+        # the codar.spots table.  None when CH isn't configured;
+        # set in SounderDaemon.__init__ from sigmond.hamsci_ch.Writer.
+        self.ch_writer = ch_writer
+        self.host_call = host_call
+        self.host_grid = host_grid
+        self.processing_version = processing_version
 
         self.clutter_mask = GroundClutterMask(window=clutter_window)
         self.writer = JsonlWriter(
@@ -125,8 +154,10 @@ class _TransmitterPipeline:
     def process_cpi(self, rx_samples) -> Optional[Path]:
         """Run one CPI through dechirp → trace → invert → write.
 
-        Returns the path written (if a peak was detected and inversion
-        succeeded), else ``None``.  Never raises — per-CPI failures are
+        Emits one JSONL record per detected peak (high-ray, low-ray,
+        E-layer, etc.); each record is layer-classified.  Returns the
+        path of the most-recent write (if any peak was successfully
+        recorded), else ``None``.  Never raises — per-CPI failures are
         logged and swallowed so the daemon can keep running.
         """
         try:
@@ -144,59 +175,121 @@ class _TransmitterPipeline:
         ranges_km, profile = positive_range_window(result, range_profile(result))
 
         try:
-            detection = find_f_region_peak(
+            detections = find_f_region_peaks(
                 profile, ranges_km,
                 range_min_km=self.range_min_km,
                 range_max_km=self.range_max_km,
                 snr_threshold_db=self.snr_threshold_db,
                 clutter_mask=self.clutter_mask,
+                max_peaks=self.max_peaks_per_cpi,
             )
         except Exception as exc:
             log.warning("[%s] trace extraction failed: %s", self.station_id, exc)
             return None
 
-        if detection is None:
+        if not detections:
             log.debug("[%s] no F-region peak above %.1f dB this CPI",
                       self.station_id, self.snr_threshold_db)
             return None
 
-        try:
-            fix = invert(
-                group_range_km=detection.group_range_km,
-                ground_distance_km=self.ground_distance_km,
-                oblique_freq_mhz=self.center_freq_hz / 1e6,
-                group_range_uncertainty_km=self.group_range_uncertainty_km,
-            )
-        except ValueError as exc:
-            # group_range < ground_distance — geometrically impossible.
-            # This means the peak is short-range clutter the mask missed.
-            log.warning(
-                "[%s] inversion rejected peak at %.0f km (TX-RX %.0f km): %s",
-                self.station_id, detection.group_range_km,
-                self.ground_distance_km, exc,
-            )
-            return None
-
         ts = datetime.now(timezone.utc)
-        path = self.writer.write(
-            timestamp=ts,
-            fix=fix,
-            detection=detection,
-            radiod_status_dns=self.radiod_status_dns,
-            oblique_freq_hz=self.center_freq_hz,
-            coherent_seconds=self.coherent_seconds,
-            sweep_rate_hz_per_s=self.sweep_rate_hz_per_s,
-        )
-        log.info(
-            "[%s] P=%.0f km h'=%.0f±%.0f km fv=%.3f±%.3f MHz SNR=%.1f dB",
-            self.station_id,
-            fix.group_range_km, fix.virtual_height_km,
-            fix.virtual_height_uncertainty_km,
-            fix.equivalent_vertical_freq_mhz,
-            fix.equivalent_vertical_freq_uncertainty_mhz,
-            detection.snr_db,
-        )
-        return path
+        last_path: Optional[Path] = None
+        peak_count = len(detections)
+        for peak_index, detection in enumerate(detections):
+            try:
+                fix = invert(
+                    group_range_km=detection.group_range_km,
+                    ground_distance_km=self.ground_distance_km,
+                    oblique_freq_mhz=self.center_freq_hz / 1e6,
+                    group_range_uncertainty_km=self.group_range_uncertainty_km,
+                )
+            except ValueError as exc:
+                # group_range < ground_distance — geometrically impossible.
+                # Short-range clutter the mask missed; skip this peak,
+                # keep processing the rest.
+                log.warning(
+                    "[%s] inversion rejected peak %d/%d at %.0f km "
+                    "(TX-RX %.0f km): %s",
+                    self.station_id, peak_index, peak_count,
+                    detection.group_range_km, self.ground_distance_km, exc,
+                )
+                continue
+
+            last_path = self.writer.write(
+                timestamp=ts,
+                fix=fix,
+                detection=detection,
+                radiod_status_dns=self.radiod_status_dns,
+                oblique_freq_hz=self.center_freq_hz,
+                coherent_seconds=self.coherent_seconds,
+                sweep_rate_hz_per_s=self.sweep_rate_hz_per_s,
+                peak_index=peak_index,
+                peak_count=peak_count,
+            )
+
+            # CONTRACT v0.6 §17 — additive write to local CH staging tier.
+            # JSONL above remains the canonical L1 artefact (Kaeppler-
+            # compatible Zenodo schema).  CH path failure is non-fatal.
+            if self.ch_writer is not None:
+                row = self._ch_row_for(
+                    timestamp=ts, detection=detection, fix=fix,
+                    peak_index=peak_index, peak_count=peak_count,
+                )
+                try:
+                    self.ch_writer.insert([row])
+                except Exception as exc:
+                    log.warning(
+                        "[%s] CH insert failed for peak %d/%d: %s",
+                        self.station_id, peak_index, peak_count, exc,
+                    )
+
+            log.info(
+                "[%s] peak %d/%d %s P=%.0f km h'=%.0f±%.0f km "
+                "fv=%.3f±%.3f MHz SNR=%.1f dB",
+                self.station_id, peak_index, peak_count, fix.mode_layer,
+                fix.group_range_km, fix.virtual_height_km,
+                fix.virtual_height_uncertainty_km,
+                fix.equivalent_vertical_freq_mhz,
+                fix.equivalent_vertical_freq_uncertainty_mhz,
+                detection.snr_db,
+            )
+        return last_path
+
+    def _ch_row_for(
+        self, *, timestamp, detection, fix, peak_index: int, peak_count: int,
+    ) -> dict:
+        """Build a row matching the codar.spots schema (clickhouse/schema/codar/001).
+
+        Field order matches the DDL column order.  Numeric fields keep
+        full precision (no rounding) — CH has the storage, the analytics
+        side benefits from the extra digits.
+        """
+        return {
+            "time":               timestamp,
+            "host_call":          self.host_call,
+            "host_grid":          self.host_grid,
+            "radiod_id":          self.radiod_id,
+            "instance":           self.radiod_id,
+            "processing_version": self.processing_version,
+            "station_id":         self.station_id,
+            "oblique_freq_hz":    int(self.center_freq_hz),
+            "sweep_rate_hz_per_s": float(self.sweep_rate_hz_per_s),
+            "coherent_seconds":   float(self.coherent_seconds),
+            "peak_index":         int(peak_index),
+            "peak_count":         int(peak_count),
+            "mode_layer":         fix.mode_layer,
+            "snr_db":             float(detection.snr_db),
+            "group_range_km":     float(fix.group_range_km),
+            "ground_distance_km": float(fix.ground_distance_km),
+            "virtual_height_km":  float(fix.virtual_height_km),
+            "virtual_height_uncertainty_km":
+                float(fix.virtual_height_uncertainty_km),
+            "equivalent_vertical_freq_mhz":
+                float(fix.equivalent_vertical_freq_mhz),
+            "equivalent_vertical_freq_uncertainty_mhz":
+                float(fix.equivalent_vertical_freq_uncertainty_mhz),
+            "takeoff_zenith_deg": float(fix.takeoff_zenith_deg),
+        }
 
     def close(self) -> None:
         self.writer.close()
@@ -268,6 +361,32 @@ class SounderDaemon:
         receiver_lon = float(self.station.get("receiver_lon", 0.0))
         output_dir = Path(self.paths.get("output_dir", "/var/lib/codar-sounder"))
 
+        # CONTRACT v0.6 §17 — local CH staging tier.  One Writer per
+        # daemon, shared across all transmitter pipelines (they all
+        # write to codar.spots).  Returns a no-op writer when
+        # SIGMOND_CLICKHOUSE_URL is unset, so this is safe in the
+        # standalone (no-sigmond) case too.  Module-not-found means
+        # sigmond.hamsci_ch isn't installed — log and stay file-only.
+        self.ch_writer = None
+        try:
+            from sigmond.hamsci_ch import Writer as _HamsciWriter  # type: ignore[import-not-found]
+            self.ch_writer = _HamsciWriter.from_env(
+                table="spots", mode="codar",
+                schema_version=1, batch_rows=200,
+            )
+            log.info(
+                "CH writer health=%s (database=%s)",
+                self.ch_writer.health, self.ch_writer.database,
+            )
+        except ImportError:
+            log.debug("sigmond.hamsci_ch not available; CH path disabled")
+        except Exception as exc:
+            log.warning("CH writer init failed (%s); JSONL path unaffected", exc)
+
+        host_call = str(self.station.get("callsign", ""))
+        host_grid = str(self.station.get("grid_square", ""))
+        proc_version = self._processing_version_string()
+
         # All transmitters in this radiod's band share one IQ
         # subscription; the daemon dechirps each separately.
         self.pipelines: list[_TransmitterPipeline] = []
@@ -284,6 +403,10 @@ class SounderDaemon:
                 range_min_km=self.range_min_km,
                 range_max_km=self.range_max_km,
                 snr_threshold_db=self.snr_threshold_db,
+                ch_writer=self.ch_writer,
+                host_call=host_call,
+                host_grid=host_grid,
+                processing_version=proc_version,
             ))
 
         # Pick the dominant sweep rate / SRF for the synthetic fallback
@@ -371,3 +494,22 @@ class SounderDaemon:
     def close(self) -> None:
         for pipeline in self.pipelines:
             pipeline.close()
+        if self.ch_writer is not None:
+            try:
+                self.ch_writer.close()
+            except Exception as exc:
+                log.warning("CH writer close failed: %s", exc)
+
+    def _processing_version_string(self) -> str:
+        """Return ``<package_version>+<git_short>`` for the CH ``processing_version``."""
+        try:
+            from importlib.metadata import version as pkg_version
+            base = pkg_version("codar-sounder")
+        except Exception:
+            base = "0.4.0"
+        try:
+            from codar_sounder.version import GIT_INFO as _GIT
+            short = (_GIT or {}).get("short", "")
+        except Exception:
+            short = ""
+        return f"{base}+{short}" if short else base

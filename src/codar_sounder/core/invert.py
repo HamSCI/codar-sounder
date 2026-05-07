@@ -52,6 +52,56 @@ class IonosphericFix:
     equivalent_vertical_freq_mhz: float
     equivalent_vertical_freq_uncertainty_mhz: float
     takeoff_zenith_deg: float
+    mode_layer: str              # "E", "F1", "F2", "F2_extreme", "below_E", or "unknown"
+
+
+# Virtual-height boundaries (km) used by classify_layer().  These match
+# the conventional ionospheric-layer altitudes in Davies, *Ionospheric
+# Radio* (1990) and the AIPL/CCIR profiles used by digisondes:
+#
+#   * E layer       : 90  – 140 km  (also covers most sporadic-E)
+#   * F1 layer      : 140 – 220 km  (daytime; merges into F2 at night)
+#   * F2 layer      : 220 – 500 km  (always present)
+#   * F2 extreme    : > 500 km      (atypical; often nighttime F-bulge
+#                                   or a 2F2 multi-hop misclassified as
+#                                   single-hop, kept distinct so an
+#                                   analyst can flag it)
+#   * below E       : < 90  km      (very unusual; usually ground
+#                                   clutter that escaped the mask, or
+#                                   a non-physical mirror-model artefact)
+#
+# Sporadic-E (Es) cannot be reliably distinguished from regular E
+# without a frequency-vs-MUF context (digisondes do this with multiple
+# sweeps).  We collapse both to "E" and let downstream consumers
+# disambiguate from the diurnal/seasonal pattern.
+_LAYER_BOUNDARIES_KM = {
+    "below_E":     (None,  90.0),
+    "E":           ( 90.0, 140.0),
+    "F1":          (140.0, 220.0),
+    "F2":          (220.0, 500.0),
+    "F2_extreme":  (500.0,  None),
+}
+
+
+def classify_layer(virtual_height_km: float) -> str:
+    """Map a virtual height (km) to a coarse ionospheric layer label.
+
+    Returns one of: ``"E"``, ``"F1"``, ``"F2"``, ``"F2_extreme"``,
+    ``"below_E"``.  See :data:`_LAYER_BOUNDARIES_KM` for the
+    altitude-band rationale.
+
+    Returns ``"unknown"`` only for non-finite input (NaN / inf), which
+    can arise from a degenerate group-range / ground-distance ratio.
+    """
+    import math
+    if not math.isfinite(virtual_height_km):
+        return "unknown"
+    for label, (lo, hi) in _LAYER_BOUNDARIES_KM.items():
+        if (lo is None or virtual_height_km >= lo) and (
+            hi is None or virtual_height_km < hi
+        ):
+            return label
+    return "unknown"
 
 
 def virtual_height_km(group_range_km: float, ground_distance_km: float) -> float:
@@ -194,6 +244,7 @@ def invert(
         equivalent_vertical_freq_mhz=fv,
         equivalent_vertical_freq_uncertainty_mhz=dfv,
         takeoff_zenith_deg=phi,
+        mode_layer=classify_layer(h),
     )
 
 

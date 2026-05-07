@@ -5,13 +5,33 @@ One file per (radiod_id, station_id, UTC date) triple at::
     /var/lib/codar-sounder/<radiod_id>/<station>/<YYYY>/<MM>/<DD>.jsonl
 
 Each line is a self-contained JSON object: timestamp, group range,
-virtual height, equivalent vertical frequency, SNR, plus the geometry
-that produced the inversion.  Downstream consumers (HamSCI archive,
-TID/space-weather post-processors) parse one line per CPI.
+virtual height, equivalent vertical frequency, SNR, layer label, plus
+the geometry that produced the inversion.  Downstream consumers
+(HamSCI archive, TID/space-weather post-processors) parse one record
+per detected peak.
+
+Schema (v0.4):
+    timestamp                        ISO-8601 UTC
+    client                           "codar-sounder"
+    radiod_id, radiod_status_dns     identity
+    station_id                       transmitter id (e.g. "DUCK")
+    oblique_freq_hz, sweep_rate_hz_per_s, coherent_seconds   measurement context
+    peak_index                       0-based rank within the CPI (0 = strongest)
+    peak_count                       total peaks reported for this CPI
+    mode_layer                       "E" / "F1" / "F2" / "F2_extreme" / "below_E"
+    snr_db                           peak vs. window-median (dB)
+    group_range_km, ground_distance_km
+    virtual_height_km (+ uncertainty)
+    equivalent_vertical_freq_mhz (+ uncertainty)
+    takeoff_zenith_deg
 
 Atomic-ish writes: each record is written with a trailing newline and
 ``flush()``.  We don't fsync per-record (would dominate I/O cost on
 hosts with rotational disks) — at most one record can be lost on crash.
+
+This file remains the canonical L1 artefact.  The CONTRACT v0.6 §17
+ClickHouse sink (codar.spots) is *additive* — written from the daemon
+in parallel via :class:`sigmond.hamsci_ch.Writer`, never instead of.
 """
 
 from __future__ import annotations
@@ -72,8 +92,17 @@ class JsonlWriter:
         oblique_freq_hz: int,
         coherent_seconds: float,
         sweep_rate_hz_per_s: float,
+        peak_index: int = 0,
+        peak_count: int = 1,
     ) -> Path:
-        """Write one record and return the path it landed in."""
+        """Write one record and return the path it landed in.
+
+        ``peak_index`` is the 0-based rank of this peak among the CPI's
+        detections (0 = strongest); ``peak_count`` is the total number
+        of peaks reported for this CPI.  When the daemon emits one
+        record per detected peak, downstream consumers use these to
+        regroup peaks back into their parent CPI.
+        """
         record: dict[str, Any] = {
             "timestamp": timestamp.astimezone(timezone.utc).isoformat(),
             "client": "codar-sounder",
@@ -83,6 +112,9 @@ class JsonlWriter:
             "oblique_freq_hz": oblique_freq_hz,
             "sweep_rate_hz_per_s": sweep_rate_hz_per_s,
             "coherent_seconds": coherent_seconds,
+            "peak_index": peak_index,
+            "peak_count": peak_count,
+            "mode_layer": fix.mode_layer,
             "snr_db": round(detection.snr_db, 2),
             "group_range_km": round(fix.group_range_km, 2),
             "ground_distance_km": round(fix.ground_distance_km, 2),
