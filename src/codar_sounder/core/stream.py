@@ -281,7 +281,14 @@ class RadiodIQSource:
             self._filter_low_edge_hz,
             self._filter_high_edge_hz,
         )
-        self._control = _ka9q_RadiodControl(self.radiod_status_dns)  # type: ignore[name-defined]
+        # client_id makes ka9q-python derive a per-(client, radiod)
+        # multicast destination so CODAR's IQ stream never shares a
+        # multicast group with peer clients on the same radiod.
+        # CONTRACT v0.3 §7 / ka9q-python ≥ 3.14.0.
+        self._control = _ka9q_RadiodControl(  # type: ignore[name-defined]
+            self.radiod_status_dns,
+            client_id="codar-sounder",
+        )
         # Force F32LE (encoding=4) IQ.  ka9q-python's default (S16BE)
         # appears to deliver byte-swap-corrupted samples from this
         # ka9q-python / radiod combination — magnitudes come out as
