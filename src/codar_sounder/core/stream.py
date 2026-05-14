@@ -16,7 +16,17 @@ Two backends are supported:
     additive complex noise.
 
 Both backends present the same interface: an iterable that yields
-contiguous ``numpy.complex64`` chunks of ``cpi_n_samples`` length each.
+``(samples, cpi_start_utc)`` tuples where ``samples`` is a contiguous
+``numpy.complex64`` array of ``cpi_n_samples`` length and
+``cpi_start_utc`` is a timezone-aware ``datetime`` labeling the UTC
+moment of the first sample in that CPI.
+
+The radiod backend derives ``cpi_start_utc`` from the RTP sample
+counter plus an optional hf-timestd ``rtp_to_utc_offset_ns``, per
+METROLOGY.md §4.5 RTP-reference labeling invariant — no wall-clock
+read per CPI, no shadow timing diagnostics.  The synthetic backend
+labels each CPI with ``datetime.now(timezone.utc)`` since it has no
+authoritative time source; that's fine for tests and dry-runs.
 """
 
 from __future__ import annotations
@@ -24,7 +34,8 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Iterator, Optional
+from datetime import datetime, timedelta, timezone
+from typing import Iterator, Optional, Tuple
 
 import numpy as np
 
@@ -124,10 +135,13 @@ class SyntheticIQSource:
         self._t_offset_s += n / self.sample_rate_hz
         return rx
 
-    def __iter__(self) -> Iterator[np.ndarray]:
+    def __iter__(self) -> Iterator[Tuple[np.ndarray, datetime]]:
         while not self._stopped.is_set():
             t0 = time.monotonic()
-            yield self._generate_one_cpi()
+            # Synthetic source has no authoritative time — label each CPI
+            # with wall-clock-now.  This backend is only used for tests
+            # and dry-runs; production goes through RadiodIQSource.
+            yield (self._generate_one_cpi(), datetime.now(timezone.utc))
             if self.realtime:
                 elapsed = time.monotonic() - t0
                 remaining = self.cpi_seconds - elapsed
@@ -175,8 +189,16 @@ class RadiodIQSource:
         filter_low_edge_hz: Optional[float] = None,
         filter_high_edge_hz: Optional[float] = None,
         filter_guard_hz: float = 1500.0,
+        authority_reader: Optional["AuthorityReader"] = None,
     ):
         import queue as _q                   # stdlib
+
+        # Imported lazily so the test suite + synthetic mode don't need
+        # the authority machinery present to import this module.
+        from codar_sounder.core.authority_reader import AuthorityReader as _AR
+        self._authority_reader = (
+            authority_reader if authority_reader is not None else _AR()
+        )
 
         self.radiod_status_dns = radiod_status_dns
         self.channel_name = channel_name
@@ -216,6 +238,11 @@ class RadiodIQSource:
         # to occlude a real backlog.
         self._sample_queue: "_q.Queue[np.ndarray]" = _q.Queue(maxsize=64)
         self._stopped = threading.Event()
+        # Anchor state for RTP-derived CPI timestamps (METROLOGY.md §4.5
+        # RTP-reference invariant).  Captured on the first packet's
+        # quality block; consumed in __iter__ to compute each CPI's
+        # start UTC by pure sample-count projection.
+        self._anchor_first_rtp: Optional[int] = None
         self._import_ka9q()                  # raises ModuleNotFoundError if missing
 
     @property
@@ -249,6 +276,13 @@ class RadiodIQSource:
         """
         if self._stopped.is_set():
             return
+        # Capture the very first packet's RTP timestamp for CPI anchoring.
+        # Done in the callback (not the iterator) because the first packet
+        # may arrive before the iter loop has consumed anything.
+        if self._anchor_first_rtp is None:
+            first_rtp = getattr(quality, "first_rtp_timestamp", None)
+            if first_rtp is not None:
+                self._anchor_first_rtp = int(first_rtp)
         arr = np.asarray(samples, dtype=np.complex64)
         if not np.all(np.isfinite(arr)):
             arr = np.where(np.isfinite(arr), arr, np.complex64(0))
@@ -270,7 +304,63 @@ class RadiodIQSource:
             except Exception:
                 pass
 
-    def __iter__(self) -> Iterator[np.ndarray]:
+    def _compute_anchor_utc(self) -> datetime:
+        """Derive the UTC timestamp of the very first sample delivered.
+
+        Uses ka9q.rtp_to_wallclock() against the captured first_rtp_timestamp
+        + channel_info (gps_time / rtp_timesnap), then adds the
+        rtp_to_utc_offset_ns published by hf-timestd if available.  This
+        is the §4.5 RTP-reference invariant in concrete form: time is
+        hf-timestd's product, the client just consumes it.
+
+        If the first RTP timestamp wasn't captured (no packet ever
+        arrived — extremely unlikely by the time we're computing this)
+        OR rtp_to_wallclock returns None, fall back to wall-clock-now
+        with an explicit warning.
+        """
+        from ka9q.rtp_recorder import rtp_to_wallclock  # type: ignore
+        snap = None
+        try:
+            snap = self._authority_reader.read()
+        except Exception as exc:                # noqa: BLE001
+            log.warning("authority read failed: %s", exc)
+        offset_sec = snap.offset_seconds if (snap and snap.offset_usable) else 0.0
+        # Use time.time() as a wrap-epoch hint for rtp_to_wallclock —
+        # this is wrap-disambiguation only (±period/2 tolerance, hours),
+        # not a labeling reference.  Per §4.5 it's the documented
+        # explicit-hint use of system clock; the actual UTC label is
+        # the RTP-derived value plus the authority offset.
+        utc_sec: Optional[float] = None
+        if self._anchor_first_rtp is not None and self._channel_info is not None:
+            utc_sec = rtp_to_wallclock(
+                self._anchor_first_rtp,
+                self._channel_info,
+                wallclock_hint_sec=time.time() + offset_sec,
+            )
+        if utc_sec is None:
+            log.warning(
+                "RadiodIQSource: CPI anchor falling back to wall-clock — "
+                "RTP timing info unavailable (anchor_first_rtp=%r, "
+                "channel_info=%r).  Labels will be tied to host clock; "
+                "if hf-timestd is available it should still take over via "
+                "authority.json offset.",
+                self._anchor_first_rtp, self._channel_info,
+            )
+            return datetime.now(timezone.utc)
+        anchor = datetime.fromtimestamp(utc_sec, tz=timezone.utc) + timedelta(
+            seconds=offset_sec,
+        )
+        log.info(
+            "RadiodIQSource: CPI anchor %s (rtp=%d, authority=%s, "
+            "offset=%+.6fs)",
+            anchor.isoformat(),
+            self._anchor_first_rtp,
+            (snap.t_level_active if snap else "unavailable"),
+            offset_sec,
+        )
+        return anchor
+
+    def __iter__(self) -> Iterator[Tuple[np.ndarray, datetime]]:
         log.info(
             "RadiodIQSource: provisioning channel on %s freq=%d Hz "
             "preset=%s sample_rate=%d Hz encoding=F32LE filter=[%.0f,%.0f] Hz",
@@ -326,6 +416,8 @@ class RadiodIQSource:
         n_samples = self.cpi_n_samples
         buf = np.empty(n_samples, dtype=np.complex64)
         filled = 0
+        anchor_utc: Optional[datetime] = None
+        cpi_index = 0
         try:
             while not self._stopped.is_set():
                 try:
@@ -355,7 +447,19 @@ class RadiodIQSource:
                                     "RadiodIQSource: lifetime refresh failed: %s",
                                     exc,
                                 )
-                        yield buf.copy()
+                        # Anchor (one-time): the first packet has set
+                        # self._anchor_first_rtp; derive the RTP-anchored
+                        # UTC of the first sample ever delivered, applying
+                        # hf-timestd's offset when available (§4.5).
+                        if anchor_utc is None:
+                            anchor_utc = self._compute_anchor_utc()
+                        # Sample-count projection — pure cadence math, no
+                        # wall-clock consulted per CPI.
+                        cpi_start_utc = anchor_utc + timedelta(
+                            seconds=cpi_index * self.cpi_seconds,
+                        )
+                        yield (buf.copy(), cpi_start_utc)
+                        cpi_index += 1
                         filled = 0
         finally:
             try:

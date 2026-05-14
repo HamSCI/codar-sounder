@@ -41,7 +41,7 @@ import os
 import socket
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -151,7 +151,7 @@ class _TransmitterPipeline:
             self.group_range_uncertainty_km, self.tdma_offset_samples,
         )
 
-    def process_cpi(self, rx_samples) -> Optional[Path]:
+    def process_cpi(self, rx_samples, cpi_start_utc: datetime) -> Optional[Path]:
         """Run one CPI through dechirp → trace → invert → write.
 
         Emits one JSONL record per detected peak (high-ray, low-ray,
@@ -192,7 +192,11 @@ class _TransmitterPipeline:
                       self.station_id, self.snr_threshold_db)
             return None
 
-        ts = datetime.now(timezone.utc)
+        # CPI timestamp comes from the iq_source (RTP-derived + authority
+        # offset for radiod path; wall-clock for synthetic).  Per
+        # METROLOGY.md §4.5 RTP-reference invariant — the recorder does
+        # not consult wall clock for data labels.
+        ts = cpi_start_utc
         last_path: Optional[Path] = None
         peak_count = len(detections)
         for peak_index, detection in enumerate(detections):
@@ -473,13 +477,13 @@ class SounderDaemon:
         )
 
         try:
-            for cpi_samples in self.iq_source:
+            for cpi_samples, cpi_start_utc in self.iq_source:
                 if self._stopped.is_set():
                     break
                 # Fan out: every transmitter sees the same IQ; each
                 # dechirps with its own sweep params, finds its own peak.
                 for pipeline in self.pipelines:
-                    pipeline.process_cpi(cpi_samples)
+                    pipeline.process_cpi(cpi_samples, cpi_start_utc)
                 _sd_notify("WATCHDOG=1")
         except KeyboardInterrupt:
             log.info("interrupted")

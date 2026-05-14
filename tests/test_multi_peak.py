@@ -323,8 +323,8 @@ class TestPipelineEmitsCh:
             target_group_range_km=520.0,    # within range_min/max
             realtime=False,
         )
-        cpi = next(iter(synth))
-        path = pipeline.process_cpi(cpi)
+        cpi, cpi_start_utc = next(iter(synth))
+        path = pipeline.process_cpi(cpi, cpi_start_utc)
         try:
             assert path is not None, "no JSONL record written"
             assert len(fake.inserts) >= 1, "no CH inserts"
