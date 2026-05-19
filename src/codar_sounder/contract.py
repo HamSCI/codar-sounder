@@ -8,13 +8,12 @@ Contract layout (sigmond/docs/CLIENT-CONTRACT.md):
   §12  validate --json — config validation
   §14  configuration interview — config init/edit
   §15  radiod channel contributions ([[radiod.fragment]])
-  §17  output sinks — data_sinks array per instance (file/sqlite)
+  §17  output sinks — data_sinks array per instance (file)
 """
 
 from __future__ import annotations
 
 import logging
-import os
 from importlib.metadata import version as pkg_version
 from pathlib import Path
 from typing import Any
@@ -36,17 +35,6 @@ def _client_version() -> str:
         return pkg_version("codar-sounder")
     except Exception:
         return "0.1.0"
-
-
-def _sqlite_sink_available() -> bool:
-    """True when the local HamSCI SQLite sink is in play.
-
-    Mirrors `sigmond.hamsci_sink.Writer.from_env`: an explicit
-    `SIGMOND_SQLITE_PATH`, or the default sink file already on disk.
-    """
-    if (os.environ.get("SIGMOND_SQLITE_PATH") or "").strip():
-        return True
-    return Path("/var/lib/sigmond/sink.db").exists()
 
 
 def build_inventory(config: dict, config_path: Path) -> dict:
@@ -72,10 +60,9 @@ def build_inventory(config: dict, config_path: Path) -> dict:
             tx_id = tx.get("id", "<unnamed>")
             freq = int(tx.get("center_freq_hz", 0))
 
-            # CONTRACT v0.6 §17 — output sinks per instance.  JSONL
+            # CONTRACT v0.6 §17 — output sinks per instance.  The JSONL
             # spool is the canonical L1 artefact (Kaeppler-compatible
-            # Zenodo schema); the local HamSCI sink (SQLite store-and-
-            # forward queue) is added when it is in play.
+            # Zenodo schema).
             data_sinks: list[dict[str, Any]] = [
                 {
                     "kind":           "file",
@@ -85,15 +72,6 @@ def build_inventory(config: dict, config_path: Path) -> dict:
                     "mb_per_day":     5,
                 },
             ]
-            if _sqlite_sink_available():
-                data_sinks.append({
-                    "kind":           "sqlite",
-                    "target":         "codar.spots",
-                    "schema_ref":     "codar:1",
-                    "retention_days": 90,
-                    "mb_per_day":     1,        # ~1 row/min/peak; tiny
-                    "health":         "ok",
-                })
 
             instance: dict[str, Any] = {
                 "instance": tx_id,

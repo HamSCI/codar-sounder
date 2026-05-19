@@ -19,15 +19,13 @@ REPO = Path(__file__).resolve().parent.parent
 TEST_CONFIG = REPO / "tests" / "fixtures" / "test-config.toml"
 
 
-def _run_cli(*args: str, extra_env: dict | None = None) -> subprocess.CompletedProcess:
+def _run_cli(*args: str) -> subprocess.CompletedProcess:
     """Run codar-sounder CLI as a subprocess and capture stdout/stderr."""
     cmd = [sys.executable, "-m", "codar_sounder.cli", *args,
            "--config", str(TEST_CONFIG)]
     env = {"PYTHONPATH": str(REPO / "src"),
            "PATH": "/usr/bin:/bin",
            "HOME": "/tmp"}
-    if extra_env:
-        env.update(extra_env)
     return subprocess.run(
         cmd, capture_output=True, text=True, timeout=10, env=env,
     )
@@ -102,9 +100,8 @@ class TestInventory:
     def test_data_sinks_v0_6(self):
         """CONTRACT v0.6 §17.3: each instance has a data_sinks array.
 
-        The file sink is always present.  The local HamSCI sink is
-        SQLite-backed and env-gated; ClickHouse is no longer a sink
-        kind so it must never appear.
+        Only `file` sinks are declared; ClickHouse is removed suite-wide
+        so it must never appear as a sink kind.
         """
         for inst in self.data["instances"]:
             sinks = inst["data_sinks"]
@@ -113,24 +110,10 @@ class TestInventory:
             assert "file" in kinds
             # ClickHouse is removed suite-wide; never a valid sink kind.
             assert "clickhouse" not in kinds
-            # Only file and (env-gated) sqlite sinks are valid.
-            assert kinds <= {"file", "sqlite"}
+            assert kinds <= {"file"}
             for sink in sinks:
                 for key in ("kind", "target", "retention_days", "mb_per_day"):
                     assert key in sink, f"sink missing {key}"
-
-    def test_sqlite_sink_appears_when_configured(self):
-        """The SQLite HamSCI sink is declared when SIGMOND_SQLITE_PATH is set."""
-        proc = _run_cli(
-            "inventory", "--json",
-            extra_env={"SIGMOND_SQLITE_PATH": "/tmp/codar-test-sink.db"},
-        )
-        assert proc.returncode == 0, f"stderr: {proc.stderr}"
-        data = json.loads(proc.stdout)
-        for inst in data["instances"]:
-            kinds = {s["kind"] for s in inst["data_sinks"]}
-            assert "sqlite" in kinds
-            assert "clickhouse" not in kinds
 
     def test_instance_ids_are_station_codes(self):
         ids = {inst["instance"] for inst in self.data["instances"]}
