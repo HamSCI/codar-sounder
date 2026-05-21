@@ -28,4 +28,4 @@ htmlcov/
 .DS_Store
 
 # uv tooling
-uv.lock
+# uv.lock is intentionally tracked (application policy: reproducible deploys via `git pull && uv sync`)
