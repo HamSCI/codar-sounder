@@ -33,6 +33,7 @@ import argparse
 import datetime as dt
 import json
 import logging
+import math
 import sys
 import urllib.request
 from collections import defaultdict
@@ -115,6 +116,8 @@ class BucketStats:
     sum_sigma_phi_rad: float = 0.0
     sum_underfit_ratio: float = 0.0
     n_dechirp_rejected_total: int = 0
+    # v0.7+ multi-hop tracking.
+    n_hops_counts: dict[int, int] = field(default_factory=lambda: defaultdict(int))
 
 
 def iter_records(jsonl_root: Path, start: dt.date, end: dt.date) -> Iterable[dict]:
@@ -143,18 +146,28 @@ def iter_records(jsonl_root: Path, start: dt.date, end: dt.date) -> Iterable[dic
 
 def aggregate(
     records: Iterable[dict], kp_series: dict[dt.datetime, float],
-) -> dict[dt.datetime, BucketStats]:
-    """Walk records, bucket them by Kp 3-hour window, accumulate stats."""
-    buckets: dict[dt.datetime, BucketStats] = {}
+) -> tuple[dict[dt.datetime, BucketStats], dict[dt.datetime, BucketStats]]:
+    """Walk records, bucket them by 3-hour window, accumulate stats.
+
+    Returns ``(matched, unmatched)`` where ``matched`` covers buckets
+    with a published Kp value and ``unmatched`` covers buckets whose
+    Kp hasn't been published yet (NOAA SWPC has a 3-hour publication
+    lag — recent data falls into a bucket that doesn't exist in the
+    Kp series until the next publication cycle).
+    """
+    matched: dict[dt.datetime, BucketStats] = {}
+    unmatched: dict[dt.datetime, BucketStats] = {}
     last_cpi_key: tuple[dt.datetime, str] | None = None
     for rec in records:
         ts = dt.datetime.fromisoformat(rec["timestamp"]).astimezone(dt.timezone.utc)
         bucket = kp_bucket(ts)
-        if bucket not in kp_series:
-            continue   # Kp data doesn't cover this bucket
-        b = buckets.setdefault(
-            bucket, BucketStats(kp=kp_series[bucket]),
-        )
+        if bucket in kp_series:
+            store = matched
+            kp = kp_series[bucket]
+        else:
+            store = unmatched
+            kp = float("nan")
+        b = store.setdefault(bucket, BucketStats(kp=kp))
         b.n_records += 1
         # CPI counting via (timestamp, station_id) tuple — peak_index
         # varies but timestamp is identical across a CPI's peak records.
@@ -166,6 +179,8 @@ def aggregate(
         b.sum_virtual_height_km += float(rec.get("virtual_height_km", 0.0))
         b.sum_peak_count += int(rec.get("peak_count", 0))
         b.sum_snr_db += float(rec.get("snr_db", 0.0))
+        # v0.7+ n_hops field — absent in older records (treated as 1-hop).
+        b.n_hops_counts[int(rec.get("n_hops", 1))] += 1
         # Scintillation fields (v0.5+ only).
         if "s4_index" in rec:
             b.n_scint_records += 1
@@ -180,50 +195,91 @@ def aggregate(
             b.n_dechirp_rejected_total += int(
                 rec.get("dechirp_sweeps_rejected", 0)
             )
-    return buckets
+    return matched, unmatched
 
 
 def _pct(n: int, d: int) -> float:
     return 100.0 * n / d if d > 0 else 0.0
 
 
+def _proxy_row(ts: dt.datetime, b: BucketStats, kp_label: str = None) -> str:
+    f2e_pct = _pct(b.mode_counts.get("F2_extreme", 0), b.n_records)
+    mean_h = b.sum_virtual_height_km / b.n_records if b.n_records else 0.0
+    mean_snr = b.sum_snr_db / b.n_records if b.n_records else 0.0
+    mean_peaks = b.sum_peak_count / b.n_records if b.n_records else 0.0
+    multi_hop = sum(c for n, c in b.n_hops_counts.items() if n >= 2)
+    nhop_pct = _pct(multi_hop, b.n_records)
+    label = kp_label if kp_label is not None else (
+        f"{b.kp:.2f} | {kp_storm_level(b.kp):>9}"
+    )
+    return (
+        f"| {ts:%Y-%m-%d %H:00} | {label} "
+        f"| {b.n_cpis} | {b.n_records} "
+        f"| {f2e_pct:5.1f} | {nhop_pct:5.1f} | {mean_h:6.1f} | {mean_snr:5.1f} "
+        f"| {mean_peaks:.2f} |"
+    )
+
+
 def render_markdown(
-    buckets: dict[dt.datetime, BucketStats], jsonl_root: Path,
+    matched: dict[dt.datetime, BucketStats],
+    unmatched: dict[dt.datetime, BucketStats],
+    jsonl_root: Path,
 ) -> str:
     lines: list[str] = []
     lines.append(
         "# codar-sounder × Kp correlation analysis\n"
     )
+    all_times = sorted(set(matched) | set(unmatched))
     lines.append(
-        f"Analysis window: {min(buckets):%Y-%m-%d %H:%M} to "
-        f"{max(buckets):%Y-%m-%d %H:%M} UTC; source: {jsonl_root}\n"
+        f"Analysis window: {all_times[0]:%Y-%m-%d %H:%M} to "
+        f"{all_times[-1]:%Y-%m-%d %H:%M} UTC; source: {jsonl_root}\n"
     )
-
-    # ── Section 1: proxy metrics across all buckets (mode_layer rates,
-    # virtual_height, etc.) — works for all epochs.
-    lines.append("## Proxy metrics by 3-hour Kp bucket\n")
-    lines.append(
-        "| UTC bucket | Kp | level | CPIs | recs | F2_extr% | mean h' (km) | mean SNR | mean peaks |"
-    )
-    lines.append(
-        "|---|---|---|---|---|---|---|---|---|"
-    )
-    for ts in sorted(buckets):
-        b = buckets[ts]
-        f2e_pct = _pct(b.mode_counts.get("F2_extreme", 0), b.n_records)
-        mean_h = b.sum_virtual_height_km / b.n_records if b.n_records else 0.0
-        mean_snr = b.sum_snr_db / b.n_records if b.n_records else 0.0
-        mean_peaks = b.sum_peak_count / b.n_records if b.n_records else 0.0
+    if unmatched:
         lines.append(
-            f"| {ts:%Y-%m-%d %H:00} | {b.kp:.2f} | {kp_storm_level(b.kp):>9} "
-            f"| {b.n_cpis} | {b.n_records} "
-            f"| {f2e_pct:5.1f} | {mean_h:6.1f} | {mean_snr:5.1f} "
-            f"| {mean_peaks:.2f} |"
+            f"Note: {len(unmatched)} bucket(s) at the end of the window "
+            f"lack a published NOAA Kp value (3-hour publication lag); "
+            f"shown in a separate section below.\n"
         )
 
-    # ── Section 2: scintillation metrics for buckets that have them
-    # (v0.5+ records only).
-    scint_buckets = {ts: b for ts, b in buckets.items() if b.n_scint_records > 0}
+    # ── Section 1: proxy metrics across Kp-matched buckets
+    lines.append("## Proxy metrics by 3-hour Kp bucket\n")
+    lines.append(
+        "v0.7+ records carry an ``n_hops`` field; the **multi-hop%** "
+        "column shows the fraction of records classified as 2+ hop "
+        "by ``invert()``.  Pre-v0.7 records are counted as 1-hop "
+        "(legacy default).\n"
+    )
+    lines.append(
+        "| UTC bucket | Kp | level | CPIs | recs | F2_extr% | multi-hop% "
+        "| mean h' (km) | mean SNR | mean peaks |"
+    )
+    lines.append(
+        "|---|---|---|---|---|---|---|---|---|---|"
+    )
+    for ts in sorted(matched):
+        lines.append(_proxy_row(ts, matched[ts]))
+
+    if unmatched:
+        lines.append("\n## Recent buckets (Kp not yet published)\n")
+        lines.append(
+            "These buckets cover data captured since the most recent "
+            "NOAA Kp publication.  Re-run after the next publication "
+            "cycle (~3 hours) to backfill Kp correlation.\n"
+        )
+        lines.append(
+            "| UTC bucket | Kp | level | CPIs | recs | F2_extr% "
+            "| multi-hop% | mean h' (km) | mean SNR | mean peaks |"
+        )
+        lines.append(
+            "|---|---|---|---|---|---|---|---|---|---|"
+        )
+        for ts in sorted(unmatched):
+            lines.append(_proxy_row(ts, unmatched[ts], "—       |     pending"))
+
+    # ── Section 2: scintillation metrics across all buckets (matched
+    # and unmatched) that have v0.5+ records.
+    all_buckets = {**matched, **unmatched}
+    scint_buckets = {ts: b for ts, b in all_buckets.items() if b.n_scint_records > 0}
     if scint_buckets:
         lines.append("\n## Scintillation metrics by 3-hour Kp bucket (v0.5+ data only)\n")
         lines.append(
@@ -249,17 +305,22 @@ def render_markdown(
                 b.n_dechirp_rejected_total / b.n_records
                 if b.n_records else 0.0
             )
+            kp_label = (
+                f"{b.kp:.2f} | {kp_storm_level(b.kp):>9}"
+                if not math.isnan(b.kp)
+                else "—       |     pending"
+            )
             lines.append(
-                f"| {ts:%Y-%m-%d %H:00} | {b.kp:.2f} | {kp_storm_level(b.kp):>9} "
+                f"| {ts:%Y-%m-%d %H:00} | {kp_label} "
                 f"| {b.n_scint_records} "
                 f"| {ev_pct:5.1f} | {sphi_str_pct:5.1f} "
                 f"| {mean_sphi:.3f} | {mean_ratio:.3f} | {dechirp_per_cpi:.2f} |"
             )
 
-    # ── Section 3: Kp-grouped summary
+    # ── Section 3: Kp-grouped summary (matched buckets only)
     lines.append("\n## Aggregated by Kp severity\n")
     groups: dict[str, list[BucketStats]] = defaultdict(list)
-    for ts, b in buckets.items():
+    for ts, b in matched.items():
         groups[kp_storm_level(b.kp)].append(b)
     lines.append(
         "| Kp level | n buckets | total CPIs | F2_extr% | mean h' (km) | "
@@ -326,14 +387,17 @@ def main() -> None:
     )
 
     kp_series = fetch_kp_series()
-    buckets = aggregate(
+    matched, unmatched = aggregate(
         iter_records(args.jsonl_root, args.start, args.end), kp_series,
     )
-    if not buckets:
-        log.error("no records matched the Kp series window")
+    if not matched and not unmatched:
+        log.error("no records found in the window")
         sys.exit(1)
-    log.info("aggregated %d buckets", len(buckets))
-    report = render_markdown(buckets, args.jsonl_root)
+    log.info(
+        "aggregated %d matched + %d unmatched (pending Kp) buckets",
+        len(matched), len(unmatched),
+    )
+    report = render_markdown(matched, unmatched, args.jsonl_root)
     if args.output:
         args.output.write_text(report)
         log.info("wrote %s", args.output)
