@@ -24,30 +24,39 @@ remains is the scintillation fluctuation).
 
 Severity bins (strict-less-than):
 
-    S4   < 0.3 → weak     | σ_φ < 0.5 → weak    (v0.5.2: HF-calibrated)
-    S4   < 0.6 → moderate | σ_φ < 1.0 → moderate
-    S4   ≥ 0.6 → strong   | σ_φ ≥ 1.0 → strong
+    S4   < 0.3 → weak     | σ_φ < 1.5 → weak    (v0.6.2: Kp-calibrated)
+    S4   < 0.6 → moderate | σ_φ < 2.0 → moderate
+    S4   ≥ 0.6 → strong   | σ_φ ≥ 2.0 → strong
 
-A "scintillation event" is declared when ``S4 ≥ 0.3 or σ_φ ≥ 0.5``.
+A "scintillation event" is declared when ``S4 ≥ 0.3 or σ_φ ≥ 1.5``.
 
 S4 thresholds are ITU-R P.531 canonical.  σ_φ thresholds depart from
-ITU-R's 0.2 / 0.5 values because they were calibrated for narrowband
-single-mode signals (GNSS, SHF satellite) where the *intrinsic* phase
-incoherence floor is much lower than HF oblique.  Live verification on
-bee1-rx888 SEAB (13.45 MHz, 1416 km path, 2026-05-21) showed:
+ITU-R's 0.2 / 0.5 values because those were calibrated for
+narrowband single-mode signals (GNSS, SHF satellite) where the
+*intrinsic* phase incoherence floor is much lower than HF oblique.
 
-  - Quiet F-region peaks at 60 dB SNR consistently report σ_φ ≈
-    0.4-0.6 rad after detrending — within an ITU-R event-flagging
-    threshold (0.5) but with no actual scintillation present.
-  - Phase steps Δφ are bounded below π (no Doppler aliasing), but
-    HF multipath produces broadband phase fluctuations even on
-    geomagnetically quiet days.
+Calibration history
+-------------------
+The σ_φ thresholds were tightened twice during 2026-05-21
+live verification on bee1-rx888 SEAB (13.45 MHz, 1416 km):
 
-The recalibrated thresholds (0.5 / 1.0) treat the HF intrinsic floor
-as "weak" rather than misclassifying every quiet peak as a "moderate"
-or "strong" event.  Downstream consumers cross-comparing to GNSS σ_φ
-must read the codar-sounder values in this HF-recalibrated frame
-(not the ITU-R single-mode frame).
+  v0.5.0 (initial)      ITU-R: weak < 0.2 / mod < 0.5
+  v0.5.2 (HF empirical) HF:    weak < 0.5 / mod < 1.0
+  v0.6.2 (Kp-validated) HF:    weak < 1.5 / mod < 2.0
+
+The v0.5.2 thresholds were calibrated from a 4-peak probe snapshot.
+The v0.6.2 thresholds are calibrated from a 12-hour multi-Kp-bucket
+correlation analysis (``tasks/analysis/2026-05-21_kp_correlation.md``)
+showing that at Kp = 1.00 (very geomagnetically quiet) σ_φ still
+averages ≈ 1.27 rad with 77% of peaks classifying as "strong" under
+v0.5.2 — proving that the v0.5.2 thresholds were still well below
+the HF intrinsic phase-incoherence floor at this path.  The new
+thresholds aim for ~50% "weak" at typical quiet-day σ_φ ≈ 1.3 rad,
+with "strong" reserved for σ_φ ≥ 2.0 rad (likely real events).
+
+Final calibration awaits a Kp ≥ 5 storm with v0.5+ logging enabled;
+expect another nudge if storm-day σ_φ statistics suggest the bins
+need further widening.
 
 Cadence caveat
 --------------
@@ -125,18 +134,19 @@ import numpy as np
 S4_WEAK_MAX = 0.3
 S4_MODERATE_MAX = 0.6
 
-# σ_φ severity-bin boundaries — HF-recalibrated (v0.5.2; see module
-# docstring).  ITU-R single-mode thresholds (0.2 / 0.5) were too low
-# for HF oblique propagation, where intrinsic multipath phase
-# incoherence floor sits at ~0.4-0.6 rad even on quiet days.
-SIGMA_PHI_WEAK_MAX = 0.5
-SIGMA_PHI_MODERATE_MAX = 1.0
+# σ_φ severity-bin boundaries — Kp-validated (v0.6.2; see module
+# docstring).  Calibrated from the 2026-05-21 Kp-correlation analysis
+# which showed σ_φ ≈ 1.27 rad at Kp=1.00 (very quiet) — the HF
+# intrinsic floor at SEAB / 13.45 MHz / 1416 km sits at ~1.2-1.5 rad,
+# well above v0.5.2's 0.5/1.0 thresholds.
+SIGMA_PHI_WEAK_MAX = 1.5
+SIGMA_PHI_MODERATE_MAX = 2.0
 
 # "Event" gate: matches the lower bound of the moderate bin in either
 # index — a clean, monitoring-actionable threshold.  S4 ≥ 0.3 OR
-# σ_φ ≥ 0.5 (the HF-recalibrated moderate floor).
+# σ_φ ≥ 1.5 (the Kp-validated weak/moderate boundary).
 S4_EVENT_THRESHOLD = 0.3
-SIGMA_PHI_EVENT_THRESHOLD = 0.5
+SIGMA_PHI_EVENT_THRESHOLD = 1.5
 
 # Default hard floor on slow-time samples.  60 samples (the codar-sounder
 # default at CPI=60s, SRF=1Hz) sits well above this; the floor protects

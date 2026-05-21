@@ -84,6 +84,22 @@ trace → invert → scintillation → JSONL+CH writer per CPI:
     fields are additive payload-schema evolution, not contract-shape
     change.
 
+**v0.6.2 — σ_φ thresholds Kp-calibrated:**
+
+  * Severity bins re-tuned from a 60-bucket Kp-correlation analysis
+    (`tasks/analysis/2026-05-21_kp_correlation.md`).  At Kp = 1.00
+    (very quiet) production σ_φ averages 1.27 rad with 77% of peaks
+    flagging "strong" under v0.5.2 — proving the v0.5.2 thresholds
+    (0.5 / 1.0) sat well below the HF intrinsic phase-incoherence
+    floor at SEAB / 13.45 MHz / 1416 km.
+  * New thresholds: weak < 1.5 / moderate < 2.0 / strong ≥ 2.0.
+    Event gate at σ_φ ≥ 1.5.  S4 thresholds stay ITU-R canonical
+    (0.3 / 0.6).
+  * Caveat: the 12-hour scintillation-enabled window covered only
+    Kp 1.0–3.0 (quiet → unsettled).  Final calibration awaits a
+    Kp ≥ 5 storm with v0.5+ logging — expect another small nudge
+    if storm-day σ_φ statistics warrant it.
+
 **v0.6.1 — per-sweep MAD pre-filter:**
 
   * **`dechirp_sweeps_rejected`** wire field per record.  Sweeps whose

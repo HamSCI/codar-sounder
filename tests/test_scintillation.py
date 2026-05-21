@@ -224,10 +224,10 @@ class TestSigmaPhiSeverityHelper:
     @pytest.mark.parametrize("sp,expected", [
         (0.0,                            "weak"),
         (SIGMA_PHI_WEAK_MAX - 1e-12,     "weak"),
-        (SIGMA_PHI_WEAK_MAX,             "moderate"),  # v0.5.2: 0.5 → moderate
+        (SIGMA_PHI_WEAK_MAX,             "moderate"),  # v0.6.2: 1.5 → moderate
         (SIGMA_PHI_MODERATE_MAX - 1e-12, "moderate"),
-        (SIGMA_PHI_MODERATE_MAX,         "strong"),    # v0.5.2: 1.0 → strong
-        (1.5,                            "strong"),
+        (SIGMA_PHI_MODERATE_MAX,         "strong"),    # v0.6.2: 2.0 → strong
+        (2.5,                            "strong"),
     ])
     def test_boundary(self, sp, expected):
         assert _sigma_phi_severity(sp) == expected
@@ -259,15 +259,28 @@ class TestS4SeverityEndToEnd:
 
 
 class TestSigmaPhiSeverityEndToEnd:
+    """End-to-end measurement plumbing — verifies a constructed σ_φ
+    target round-trips through ``compute_scintillation`` to the
+    correct severity bin.  Restricted to the *unwrap-safe* regime
+    (target σ ≲ 1.0): the orthogonal-to-quadratic phase pattern's
+    per-sample step grows with target σ, and exceeds π/sample
+    around target σ ≈ 1.05 — at which point ``np.unwrap`` interprets
+    the swing as a 2π wrap, corrupting the test signal.
+
+    Boundary assignment at the new v0.6.2 thresholds (1.5 / 2.0) is
+    covered by ``TestSigmaPhiSeverityHelper`` at exact float64 values
+    where unwrap is irrelevant.  Real production σ_φ ≈ 1.3 rad on
+    quiet days is measured from naturally-distributed phase that
+    doesn't violate unwrap per-sample even though its std is large.
+    """
+
     @pytest.mark.parametrize("target_sp,expected", [
-        (0.05,                                "weak"),
-        (SIGMA_PHI_WEAK_MAX - _BOUNDARY_TOL,  "weak"),
-        (SIGMA_PHI_WEAK_MAX + _BOUNDARY_TOL,  "moderate"),
-        (SIGMA_PHI_MODERATE_MAX - _BOUNDARY_TOL, "moderate"),
-        (SIGMA_PHI_MODERATE_MAX + _BOUNDARY_TOL, "strong"),
-        (1.5,                                 "strong"),
+        (0.05, "weak"),
+        (0.3,  "weak"),
+        (0.7,  "weak"),     # well within the new weak bin (< 1.5)
+        (1.0,  "weak"),     # still weak under v0.6.2 thresholds
     ])
-    def test_e2e(self, target_sp, expected):
+    def test_e2e_unwrap_safe(self, target_sp, expected):
         phase = _phase_pattern_orthogonal_to_linear(target_sp)
         z = _complex_from(np.ones(N_SAMPLES), phase)
         r = compute_scintillation(z, sample_rate_hz=SRF_HZ)
@@ -296,13 +309,22 @@ class TestScintillationEvent:
         assert r.scintillation_event is True
 
     def test_event_when_sigma_phi_at_threshold(self):
-        # Place σ_φ just above the threshold so complex64 + detrending
-        # noise doesn't push us across it.  The event gate itself uses
-        # ``>=`` so this test exercises the ≥ branch.
-        target = SIGMA_PHI_EVENT_THRESHOLD + _BOUNDARY_TOL
-        phase = _phase_pattern_orthogonal_to_linear(target)
-        z = _complex_from(np.ones(N_SAMPLES), phase)
+        # The σ_φ event threshold (v0.6.2: 1.5 rad) sits above the
+        # unwrap-safe regime of the test pattern (target σ ≲ 1.0).
+        # Construct phases directly and bypass the orthogonal-quad
+        # pattern + complex round-trip — the event gate is a simple
+        # `>=` check on the computed σ_φ, fully covered by the helper
+        # tests above.  Here we verify the gate fires for a manually
+        # constructed real-but-noisy slow_time vector whose σ_φ
+        # exceeds threshold.
+        rng = np.random.default_rng(seed=2026)
+        n = N_SAMPLES
+        # Random phases drawn uniformly in (-π, π); std ≈ π/√3 ≈ 1.81
+        # > 1.5 event threshold.
+        phase = rng.uniform(-np.pi, np.pi, size=n)
+        z = _complex_from(np.ones(n), phase)
         r = compute_scintillation(z, sample_rate_hz=SRF_HZ)
+        assert r.sigma_phi_rad >= SIGMA_PHI_EVENT_THRESHOLD
         assert r.scintillation_event is True
 
 

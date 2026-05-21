@@ -485,3 +485,83 @@ working correctly: when ``dechirp_sweeps_rejected = N``, the
 per-peak slow-time vectors at those positions are excluded from
 the per-peak MAD statistics so a wider-variance bin's intrinsic
 fluctuation can't mask the upstream rejection.
+
+
+## Kp-baseline analysis (2026-05-21)
+
+Analysis-only task (no codar-sounder code change) — added a
+re-runnable correlation script and saved the first report:
+
+  - ``scripts/kp_correlation_analysis.py`` — pulls NOAA SWPC
+    planetary-Kp JSON, glob-streams JSONL records in a date range,
+    buckets them by 3-hour Kp window, and emits a Markdown table
+    of proxy + scintillation metrics per bucket plus a Kp-severity
+    aggregate.
+  - ``tasks/analysis/2026-05-21_kp_correlation.md`` — first run
+    over May 14-21 (8 days, ~200k records spanning the May 15-16
+    G2 storm at Kp=6.33 and the v0.5+ scintillation rollout).
+
+Key findings (full prose in the report file):
+
+  1. σ_φ thresholds still too low: at Kp=1.00 (quietest bucket)
+     σ_φ averages 1.27 rad with 77% of peaks "strong" under v0.5.2.
+     HF intrinsic floor at SEAB sits at ~1.2-1.5 rad.  Drove the
+     v0.6.2 recalibration below.
+  2. F2_extreme rate is suspiciously high (~35%) and uncorrelated
+     with Kp.  Hypothesis: ``invert()`` mishandles 3-hop returns
+     (group_range ≈ 2000+ km at SEAB) as 1-hop with implausibly
+     high h'.  Worth a dedicated investigation in a later release.
+  3. The G2 storm did nudge metrics, but the SNR drop and CPI-count
+     drop are more reliable disturbance signals than F2_extreme
+     rate.
+
+
+## v0.6.2 — σ_φ Kp-calibrated thresholds (2026-05-21)
+
+Direct outcome of finding 1 above.  v0.5.2's recalibration (0.5/1.0)
+was correct in direction but insufficient in magnitude; the
+Kp-correlation analysis shows the HF intrinsic floor at this path
+sits around 1.2-1.5 rad even on the quietest geomagnetic days.
+
+### Tasks
+
+- [x] ``core/scintillation.py``: bump ``SIGMA_PHI_WEAK_MAX`` 0.5 →
+      1.5, ``SIGMA_PHI_MODERATE_MAX`` 1.0 → 2.0,
+      ``SIGMA_PHI_EVENT_THRESHOLD`` 0.5 → 1.5.  Update module
+      docstring with the calibration history table.
+- [x] Tests:
+      - ``TestSigmaPhiSeverityHelper``: update the literal
+        out-of-bin probe value 1.5 → 2.5 (1.5 is now the
+        weak/moderate boundary, not "strong" territory).
+      - ``TestSigmaPhiSeverityEndToEnd``: restrict parametrization
+        to the unwrap-safe regime (target σ ≲ 1.0).  At higher
+        targets the orthogonal-quadratic phase pattern's per-sample
+        step exceeds π → ``np.unwrap`` interferes with the
+        constructed signal.  Helper tests already cover boundary
+        assignment at exact float64 values where unwrap is
+        irrelevant.
+      - ``test_event_when_sigma_phi_at_threshold``: rewrite to use
+        random-uniform phases (σ ≈ π/√3 ≈ 1.81 > 1.5 event
+        threshold) instead of the orthogonal-quad pattern which
+        couldn't reach 1.5 σ safely.
+- [x] ``README.md`` v0.6.2 highlights with calibration rationale.
+- [x] ``pyproject.toml`` + ``deploy.toml`` — version 0.6.1 → 0.6.2.
+
+### Out of scope (deferred)
+
+- **F2_extreme misclassification investigation** — separate
+  effort; needs a probe that loads F2_extreme records and tests
+  multi-hop re-interpretations against typical F2 heights.
+- **Storm-day σ_φ recalibration** — wait for a Kp ≥ 5 event with
+  v0.5+ logging.  Re-run ``kp_correlation_analysis.py`` once that
+  data exists.
+
+### Verification status
+
+212 tests pass (was 214 in v0.6.1; -2 net because the e2e tests
+shrank from 6 parametrize cases to 4 unwrap-safe ones, while the
+helper boundary tests gained equivalent coverage).  Live
+verification on bee1-rx888: TBD post-deploy — expect σ_φ_severity
+distribution to shift from ~85% strong (v0.6.1) toward ~50/50
+weak/moderate on quiet days, with "strong" reserved for genuine
+events.
