@@ -14,9 +14,9 @@ single-frequency oblique ionospheric sounding.
 
 ## Status
 
-**v0.5.0 — adds ITU-R P.531 scintillation indices on top of v0.4's
-feature-complete single-antenna release.**  Contract surfaces
-(`inventory --json`, `validate --json`, `version --json`,
+**v0.7.0 — multi-hop inversion + HF-calibrated scintillation on top
+of v0.4's feature-complete single-antenna release.**  Contract
+surfaces (`inventory --json`, `validate --json`, `version --json`,
 `config init|edit`, `tdma-scan`) work end-to-end against the sigmond
 v0.6 contract.  The daemon (`core/daemon.py`) routes IQ → dechirp →
 trace → invert → scintillation → JSONL+CH writer per CPI:
@@ -200,6 +200,85 @@ parameters.  Skipped for this release; revisit when antenna lands.
 disciplined; drift is negligible at the timescales we care about) and
 HFRNet table import (self-discovery is sufficient and avoids an
 external-data dependency).
+
+## Calibration & monitoring tools
+
+The σ_φ / S4 severity thresholds, the per-sweep MAD pre-filter
+limits, and the multi-hop inversion's plausibility band were
+empirically calibrated against bee1-rx888 SEAB data on 2026-05-21
+across the v0.5.0 → v0.7.0 release cascade.  Two re-runnable
+analysis scripts live in `scripts/` to verify the calibration as
+more data accumulates and to refresh it after a geomagnetic event.
+
+### `scripts/kp_correlation_analysis.py`
+
+Pulls NOAA SWPC's 30-day planetary Kp JSON, glob-streams JSONL
+records over a date range, buckets them by 3-hour Kp window, and
+emits a Markdown report covering, per bucket:
+
+  * mode_layer distribution + multi-hop% (v0.7+ records)
+  * mean SNR, virtual height, peak count
+  * scintillation event rate, σ_φ severity histogram, mean
+    underfit_ratio, `dechirp_sweeps_rejected`/CPI (v0.5+ records)
+
+Plus an aggregation by Kp severity level (`quiet` → `G5`) and a
+"recent buckets (Kp not yet published)" section for the most recent
+3 hours of data that NOAA hasn't covered yet.
+
+```
+uv run python3 scripts/kp_correlation_analysis.py \
+    --start 2026-05-14 --end 2026-05-21 \
+    --output tasks/analysis/latest_kp_correlation.md
+```
+
+Saved reports in `tasks/analysis/`:
+
+  * `2026-05-21_kp_correlation.md` — first run; drove the v0.6.2 σ_φ
+    recalibration (showed σ_φ ≈ 1.27 rad at Kp=1.00, well above the
+    v0.5.2 thresholds).
+  * `2026-05-21_kp_correlation_rerun.md` — post-v0.6.3/v0.7.0
+    re-run captured the full calibration cascade in a single
+    Kp-pending bucket.
+
+### `scripts/multihop_diagnostic.py`
+
+For each F2_extreme record in a date range, computes the apparent
+virtual height under N = 1, 2, 3, 4 hop hypotheses and reports the
+climatological fit.  This diagnostic closed the F2_extreme
+misclassification in v0.7.0 — 100% of pre-fix F2_extreme records
+had a clean 3-hop interpretation at typical F2 heights (median h' =
+263 km), confirming systematic multi-hop misclassification by the
+1-hop-only invert().
+
+```
+uv run python3 scripts/multihop_diagnostic.py \
+    --start 2026-05-14 --end 2026-05-21
+```
+
+Re-run after any future change to `invert()`'s multi-hop selection
+logic, or if the F2_extreme rate climbs unexpectedly post-v0.7
+(would suggest the selection bounds need tuning).  Saved report:
+`tasks/analysis/2026-05-21_f2_extreme_multihop_diagnostic.md`.
+
+### Open follow-up: Kp ≥ 5 storm-day calibration
+
+The v0.6.2 / v0.6.3 σ_φ and S4 HF-recalibrated thresholds were
+derived from a 12-hour window covering only Kp 1.0–3.0 (quiet →
+unsettled).  **Final calibration awaits a Kp ≥ 5 storm with v0.5+
+logging.**  When one occurs, re-run
+`scripts/kp_correlation_analysis.py` over the storm window — the
+Kp-grouped aggregate will surface the storm-day distribution and
+let us decide if the σ_φ / S4 thresholds need another nudge.  No
+scheduled job; re-run on demand when a storm appears in the NOAA
+data.
+
+### Cadence and tools at a glance
+
+| Task | When | Tool |
+|---|---|---|
+| Verify calibration drift weekly | After accumulating new data | `kp_correlation_analysis.py` |
+| Check F2_extreme rate hasn't crept back up | After any invert.py change | `multihop_diagnostic.py` |
+| Storm-day final calibration | When Kp ≥ 5 appears in NOAA data | `kp_correlation_analysis.py` |
 
 ## Install
 
