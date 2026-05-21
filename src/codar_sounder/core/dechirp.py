@@ -34,12 +34,22 @@ client stays inside sigmond's "stdlib + ka9q-python + numpy" envelope.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 
 import numpy as np
 
 
 # Speed of light, km/s.  Matches core/invert.py — keep them in sync.
 C_KM_PER_S = 299_792.458
+
+# Per-sweep MAD outlier rejection threshold (v0.6.1).  After
+# computing the range_spectrum, sweeps whose total power deviates
+# more than this many MADs from the median are zeroed out before the
+# slow-time FFT.  Catches sferic-like impulses, discrete-tone RFI
+# bursts, and longer-duration disturbances at the row level — broader
+# coverage than the v0.5.1 per-peak MAD filter applied downstream in
+# scintillation.  K=4 mirrors the scintillation constant.
+SWEEP_MAD_REJECTION_K = 4.0
 
 
 @dataclass(frozen=True)
@@ -61,6 +71,15 @@ class DechirpResult:
         doppler_axis_hz: real M-vector — Doppler frequency (Hz) per slow-time bin.
         sweep_rate_hz_per_s: the sweep rate used (echoed for downstream consumers).
         sample_rate_hz: the sample rate used (likewise).
+        n_sweeps_rejected: count of sweeps zeroed out by the per-sweep
+            MAD pre-filter (v0.6.1).  A high count flags a CPI with
+            heavy RFI / sferic contamination.
+        bad_sweep_mask: 1D bool array of length M.  ``True`` at sweep
+            positions that the pre-filter zeroed out.  Propagated to
+            scintillation as ``pre_rejected_mask`` so the downstream
+            per-peak MAD operates only on the clean samples — avoids
+            the case where embedded zeros pollute the MAD scale and
+            mask their own outlier status.
     """
     range_doppler: np.ndarray
     range_spectrum: np.ndarray
@@ -68,6 +87,8 @@ class DechirpResult:
     doppler_axis_hz: np.ndarray
     sweep_rate_hz_per_s: float
     sample_rate_hz: float
+    n_sweeps_rejected: int = 0
+    bad_sweep_mask: Optional[np.ndarray] = None
 
 
 def make_replica(
@@ -198,7 +219,42 @@ def dechirp(
     # range).  Halves the per-CPI memory footprint of `range_spectrum`.
     range_spectrum = np.fft.fft(dechirped, axis=1).astype(np.complex64)
 
+    # ─── Per-sweep MAD rejection (v0.6.1) ────────────────────────────
+    # Live verification on bee1-rx888 found that ~10-80% of CPIs have
+    # 1-2 sweeps contaminated by sferic-like impulses, discrete-tone
+    # RFI bursts (e.g., shortwave broadcast carriers at ±20 kHz from
+    # the CODAR center), or longer-duration disturbances.  Each
+    # bad sweep contributes elevated power across many range bins,
+    # corrupting both range_profile (peak detection) and per-peak
+    # slow-time vectors (scintillation).  Zeroing the bad sweeps
+    # here removes their contribution from both downstream products.
+    # The MeanAD fallback handles MAD=0 degeneracy (uniform input,
+    # rare in real signal but common in synthetic test fixtures).
+    sweep_total_power = (np.abs(range_spectrum) ** 2).sum(axis=1)
+    sweep_deviations = np.abs(sweep_total_power - np.median(sweep_total_power))
+    mad = float(np.median(sweep_deviations))
+    if mad > 0.0:
+        scale = mad
+    else:
+        scale = 1.2533 * float(np.mean(sweep_deviations))
+    if scale > 0.0:
+        bad_sweep_mask = sweep_deviations > SWEEP_MAD_REJECTION_K * scale
+    else:
+        bad_sweep_mask = np.zeros(n_sweeps, dtype=bool)
+    n_sweeps_rejected = int(bad_sweep_mask.sum())
+    if n_sweeps_rejected > 0:
+        # In-place zero: range_spectrum is a fresh array we own.
+        # Zeroing keeps the range_doppler / range_profile clean
+        # (sferic-contaminated sweeps don't contribute to the
+        # incoherent sum); the bad_sweep_mask propagates the same
+        # information to scintillation so the per-peak MAD treats
+        # those positions as already-rejected instead of trying to
+        # detect them anew via MAD-on-intensity.
+        range_spectrum[bad_sweep_mask, :] = 0
+
     # FFT along the slow-time axis → Doppler resolution per range bin.
+    # Computed AFTER the sweep rejection so dropped sweeps don't
+    # contribute to range_doppler (which range_profile sums across).
     range_doppler = np.fft.fftshift(np.fft.fft(range_spectrum, axis=0), axes=0)
 
     # Convert FFT bin → group range.  beat_freq = κ · τ → τ = beat_freq / κ.
@@ -221,6 +277,8 @@ def dechirp(
         doppler_axis_hz=doppler_axis_hz,
         sweep_rate_hz_per_s=sweep_rate_hz_per_s,
         sample_rate_hz=sample_rate_hz,
+        n_sweeps_rejected=n_sweeps_rejected,
+        bad_sweep_mask=bad_sweep_mask,
     )
 
 

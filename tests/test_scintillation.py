@@ -470,6 +470,66 @@ class TestMADOutlierRejection:
         assert r.n_samples == 11
         # 11 retained < min_samples=12 → unknown.
 
+    def test_pre_rejected_mask_excludes_upstream_zeros(self):
+        """v0.6.1: when dechirp's per-sweep MAD pre-filter has already
+        zeroed some sweeps, scintillation should treat those positions
+        as already-rejected rather than re-running MAD on them
+        (zeros pollute the MAD scale and obscure the zeros' own
+        outlier status)."""
+        n = 15
+        # Clean baseline with natural variation; zero out 2 positions
+        # as if dechirp had pre-filtered them.
+        rng = np.random.default_rng(seed=11)
+        amp = 1.0 + 0.1 * rng.standard_normal(n)
+        amp[2] = 0.0
+        amp[9] = 0.0
+        pre_mask = np.zeros(n, dtype=bool)
+        pre_mask[2] = True
+        pre_mask[9] = True
+
+        z = _complex_from(amp, np.zeros(n))
+        r = compute_scintillation(
+            z, sample_rate_hz=SRF_HZ, pre_rejected_mask=pre_mask,
+        )
+        # n_samples = upstream-kept (13) minus any per-peak MAD reject.
+        # The 13 clean samples have small variance, so per-peak MAD
+        # should find no additional outliers → n_samples = 13.
+        assert r.n_samples == 13
+        # n_outliers_rejected counts only THIS function's work,
+        # i.e. *additional* rejections beyond the upstream mask.
+        assert r.n_outliers_rejected == 0
+        # The result is computed on the 13 clean samples only — S4
+        # should be tiny (no contamination).
+        assert r.s4_index < 0.2
+        assert r.s4_severity == "weak"
+
+    def test_pre_rejected_mask_plus_additional_outlier(self):
+        """Upstream mask + a per-peak outlier that survived → both
+        rejection mechanisms fire; n_outliers_rejected counts ONLY
+        the extra per-peak rejection."""
+        n = 15
+        amp = np.ones(n, dtype=np.float64)
+        amp[3] = 0.0      # upstream-zeroed
+        amp[7] = 5.0      # per-peak outlier (a survived intensity spike)
+        pre_mask = np.zeros(n, dtype=bool)
+        pre_mask[3] = True
+        z = _complex_from(amp, np.zeros(n))
+        r = compute_scintillation(
+            z, sample_rate_hz=SRF_HZ, pre_rejected_mask=pre_mask,
+        )
+        # Per-peak MAD on the 14 upstream-kept samples should catch
+        # the spike at index 7.
+        assert r.n_outliers_rejected == 1
+        assert r.n_samples == 13     # 15 - 1 (upstream) - 1 (per-peak) = 13
+
+    def test_pre_rejected_mask_dimension_mismatch_raises(self):
+        z = np.ones(15, dtype=np.complex64)
+        bad_mask = np.zeros(14, dtype=bool)
+        with pytest.raises(ValueError, match="must match"):
+            compute_scintillation(
+                z, sample_rate_hz=SRF_HZ, pre_rejected_mask=bad_mask,
+            )
+
     def test_field_simulation_one_bad_sweep_per_15(self):
         """Reproduce the 2026-05-21 live-verification finding:
         14 clean coherent sweeps + 1 spike at the same index in every

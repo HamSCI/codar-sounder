@@ -209,6 +209,16 @@ class _TransmitterPipeline:
         # peak) keeps the per-peak loop tight.
         raw_indices = positive_to_raw_index_map(result)
 
+        # v0.6.1: log per-sweep rejection events.  A few rejections per
+        # CPI is normal (sferics, brief RFI); a high count signals a
+        # sustained RF environment problem worth investigating.
+        if result.n_sweeps_rejected > 0:
+            log.info(
+                "[%s] dechirp rejected %d/%d sweep(s) (RFI/sferic pre-filter)",
+                self.station_id, result.n_sweeps_rejected,
+                result.range_spectrum.shape[0],
+            )
+
         # CPI timestamp comes from the iq_source (RTP-derived + authority
         # offset for radiod path; wall-clock for synthetic).  Per
         # METROLOGY.md §4.5 RTP-reference invariant — the recorder does
@@ -244,8 +254,14 @@ class _TransmitterPipeline:
             # an "unknown" result with confidence=0).
             raw_bin = int(raw_indices[detection.bin_index])
             slow_time = result.range_spectrum[:, raw_bin]
+            # Pass dechirp's per-sweep rejection mask through so the
+            # per-peak MAD treats upstream-zeroed positions as already
+            # rejected rather than re-detecting them via MAD-on-
+            # intensity (which would be unreliable when zeros pollute
+            # the MAD scale).
             scint = compute_scintillation(
                 slow_time, sample_rate_hz=self.sweep_repetition_hz,
+                pre_rejected_mask=result.bad_sweep_mask,
             )
 
             last_path = self.writer.write(
@@ -259,6 +275,7 @@ class _TransmitterPipeline:
                 sweep_rate_hz_per_s=self.sweep_rate_hz_per_s,
                 peak_index=peak_index,
                 peak_count=peak_count,
+                dechirp_sweeps_rejected=result.n_sweeps_rejected,
             )
 
             # CONTRACT v0.6 §17 — additive write to the local HamSCI
@@ -270,6 +287,7 @@ class _TransmitterPipeline:
                     timestamp=ts, detection=detection, fix=fix,
                     scintillation=scint,
                     peak_index=peak_index, peak_count=peak_count,
+                    dechirp_sweeps_rejected=result.n_sweeps_rejected,
                 )
                 try:
                     self.ch_writer.insert([row])
@@ -300,6 +318,7 @@ class _TransmitterPipeline:
         self, *, timestamp, detection, fix,
         scintillation: ScintillationResult,
         peak_index: int, peak_count: int,
+        dechirp_sweeps_rejected: int = 0,
     ) -> dict:
         """Build a row for the codar.spots HamSCI sink table.
 
@@ -352,6 +371,11 @@ class _TransmitterPipeline:
                 float(scintillation.sigma_phi_quadratic_rad),
             "sigma_phi_underfit_ratio":
                 float(scintillation.sigma_phi_underfit_ratio),
+            # v0.6.1: per-CPI count of sweeps zeroed by dechirp's
+            # per-sweep MAD pre-filter.  Same value across every peak
+            # of a given CPI; downstream readers can group by CPI to
+            # see how often the pre-filter fires.
+            "dechirp_sweeps_rejected": int(dechirp_sweeps_rejected),
         }
 
     def close(self) -> None:

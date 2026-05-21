@@ -84,6 +84,24 @@ trace → invert → scintillation → JSONL+CH writer per CPI:
     fields are additive payload-schema evolution, not contract-shape
     change.
 
+**v0.6.1 — per-sweep MAD pre-filter:**
+
+  * **`dechirp_sweeps_rejected`** wire field per record.  Sweeps whose
+    post-fast-time-FFT total power deviates more than 4·MAD from the
+    CPI median are zeroed before the slow-time FFT.  Removes sferic-
+    like impulses, discrete-tone RFI bursts (e.g. shortwave broadcast
+    carriers near the CODAR band), and longer disturbances at the
+    sweep level — *before* they corrupt range_profile (peak
+    detection) or per-peak slow-time vectors.
+  * Live-verification probe identified ~80% of CPIs at 13.45 MHz had
+    1-2 anomalous sweeps split across three populations: broadband
+    impulses (sferic-like), discrete-tone RFI, and longer-duration
+    persistent disturbances.  Per-sweep pre-filter catches all three
+    via a single MAD test on per-sweep spectrum total power.
+  * Complementary to v0.5.1's per-peak MAD (which catches per-bin
+    intensity outliers that survive the pre-filter).  Defense in
+    depth.
+
 **v0.6.0 — σ_φ diagnostic fields:**
 
   * **`sigma_phi_linear_rad` + `sigma_phi_quadratic_rad`** — both

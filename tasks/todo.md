@@ -402,3 +402,86 @@ bee1-rx888: TBD post-deploy — expect ``sigma_phi_underfit_ratio``
 values to cluster around 1.0-1.5 on quiet F2 paths and >> 2 on
 disturbed F2_extreme paths (per the probe data from 2026-05-21
 showing linear → quadratic reductions of 25-60%).
+
+
+## v0.6.1 — per-sweep MAD pre-filter (2026-05-21)
+
+Investigation of the per-CPI bad-sweep artifact (deferred from
+v0.5.1) found that ~80% of CPIs at 13.45 MHz on bee1-rx888 had 1-2
+contaminated sweeps split across three distinct populations:
+
+  - Broadband impulses (~60% of bursts): spread ~17-18 kHz of the
+    passband; 3-7 ms duration; sferic-like (lightning, ESD,
+    switching transients).
+  - Discrete-tone RFI (~25% of bursts): peak/median 30-66, peak
+    frequency ≈ -20 kHz offset from center (= 13.430 MHz absolute,
+    in the 22-meter shortwave broadcast band).
+  - Persistent multi-row disturbances (~15%): >1 second duration,
+    contaminating multiple consecutive sweeps.
+
+v0.5.1's per-peak MAD on slow-time intensity catches per-bin
+amplitude outliers but doesn't address sweep-level contamination
+that touches every range bin.  A per-sweep MAD test on post-fast-
+time-FFT spectrum-total power catches all three populations.
+
+### Tasks
+
+- [x] `core/dechirp.py`:
+      - Add ``SWEEP_MAD_REJECTION_K = 4.0`` constant.
+      - After computing the complex64 ``range_spectrum``, compute per-
+        sweep total power, MAD-test against the CPI median (with
+        Iglewicz-Hoaglin MeanAD fallback for the MAD=0 degenerate
+        synthetic-test case), and zero out outlier sweeps in-place
+        before deriving ``range_doppler``.
+      - ``DechirpResult`` gains ``n_sweeps_rejected: int`` field
+        (default 0 for backward-compat with any callers that
+        construct it directly).
+- [x] `core/output.py` + `core/daemon.py`:
+      - ``JsonlWriter.write`` and ``_ch_row_for`` thread a new
+        ``dechirp_sweeps_rejected`` kwarg through to the wire fields.
+      - Daemon emits a single ``log.info`` per CPI when the pre-filter
+        fires (suppressed when 0).
+- [x] Two-stage MAD coordination (folded into v0.6.1 after live
+      verification revealed misses where embedded zeros in the slow-
+      time vector polluted the per-peak MAD scale, masking their
+      own outlier status):
+      - ``DechirpResult`` gains ``bad_sweep_mask: Optional[np.ndarray]``
+        (1D bool, length M).
+      - ``compute_scintillation`` gains ``pre_rejected_mask`` kwarg:
+        used as the initial keep mask before the per-peak MAD;
+        statistics are computed only on the upstream-kept samples so
+        the zeros can't drag the median or inflate MAD.
+      - ``process_cpi`` passes ``result.bad_sweep_mask`` through.
+      - ``n_outliers_rejected`` counts only the per-peak MAD's *extra*
+        rejections, not the upstream pre-rejected count — the two
+        stages report their work separately.
+- [x] Tests:
+      - 6 ``TestPerSweepMADRejection`` cases in test_dechirp.py:
+        clean CPI → 0 rejected; one injected bad sweep → exactly 1
+        rejected (and the row is zeroed); multiple injected bad
+        sweeps → exact count rejected; bad sweep does NOT corrupt
+        range_profile peak detection; ``n_sweeps_rejected`` field
+        present on DechirpResult; ``bad_sweep_mask`` matches
+        ``n_sweeps_rejected`` and aligns with zeroed rows.
+      - 3 ``TestMADOutlierRejection`` cases for the ``pre_rejected_mask``
+        kwarg: upstream zeros excluded from per-peak MAD math;
+        additional per-peak outliers still detected; dimension
+        mismatch raises ``ValueError``.
+      - ``test_multi_peak.py``: ``expected_cols`` extended with
+        ``dechirp_sweeps_rejected``; ``_ch_row_for`` test passes the
+        new kwarg; integration test asserts the field is int and ≥ 0.
+- [x] `README.md` v0.6.1 highlights.
+- [x] `pyproject.toml` + `deploy.toml` — version 0.6.0 → 0.6.1.
+
+### Verification status
+
+214 tests pass (was 205 in v0.6.0; +9 new total — 5 dechirp MAD
+filter + 3 scintillation coordination + 1 mask-shape verification).
+24 pre-existing Kaeppler Zenodo-dataset skips unchanged.
+
+First-deploy verification (between coordination fix and final
+deploy) showed live data with the bad_sweep_mask propagation
+working correctly: when ``dechirp_sweeps_rejected = N``, the
+per-peak slow-time vectors at those positions are excluded from
+the per-peak MAD statistics so a wider-variance bin's intrinsic
+fluctuation can't mask the upstream rejection.

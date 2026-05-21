@@ -479,3 +479,196 @@ class TestRawBinFromPositive:
             assert col.shape == (4,)  # M = 4 sweeps in this fixture
             assert col.dtype == np.complex64
             assert np.all(np.isfinite(col))
+
+
+# ---------------------------------------------------------------------------
+# Per-sweep MAD pre-filter (v0.6.1; RFI/sferic rejection).
+# ---------------------------------------------------------------------------
+
+class TestPerSweepMADRejection:
+    """The per-sweep MAD pre-filter in dechirp() zeroes out sweeps whose
+    post-fast-time-FFT total power deviates from the median.  Catches
+    sferic-like impulses, discrete-tone RFI bursts, and longer
+    disturbances at the sweep level before they corrupt range_profile
+    or the per-peak slow-time vectors that scintillation reads.
+    """
+
+    def test_clean_cpi_rejects_zero_sweeps(self):
+        """A synthetic CPI with no contamination → no sweeps rejected."""
+        rx = _synth_chirp(
+            n_total_samples=8 * N_SAMPLES,
+            target_delays_s=[1000.0 / C_KM_PER_S],
+            target_amplitudes=[1.0],
+        )
+        result = dechirp(
+            rx,
+            sample_rate_hz=SAMPLE_RATE_HZ,
+            sweep_rate_hz_per_s=SWEEP_RATE_HZ_PER_S,
+            sweep_repetition_hz=SRF_HZ,
+        )
+        assert result.n_sweeps_rejected == 0
+
+    def test_one_contaminated_sweep_is_rejected(self):
+        """Inject a broadband noise burst into one sweep of an
+        otherwise-clean 8-sweep CPI → the filter zeroes that sweep
+        and reports n_sweeps_rejected == 1."""
+        n_sweeps = 8
+        rx = _synth_chirp(
+            n_total_samples=n_sweeps * N_SAMPLES,
+            target_delays_s=[1000.0 / C_KM_PER_S],
+            target_amplitudes=[1.0],
+        )
+        # Inject broadband Gaussian noise into one sweep (row 3),
+        # large enough to elevate that sweep's total post-FFT power
+        # well above the MAD threshold.  Real-world sferic equivalent.
+        rng = np.random.default_rng(seed=137)
+        bad_sweep_idx = 3
+        noise_amp = 5.0          # >> target amplitude (1.0)
+        burst = noise_amp * (
+            rng.standard_normal(N_SAMPLES)
+            + 1j * rng.standard_normal(N_SAMPLES)
+        ).astype(np.complex64)
+        rx[bad_sweep_idx * N_SAMPLES:(bad_sweep_idx + 1) * N_SAMPLES] += burst
+
+        result = dechirp(
+            rx,
+            sample_rate_hz=SAMPLE_RATE_HZ,
+            sweep_rate_hz_per_s=SWEEP_RATE_HZ_PER_S,
+            sweep_repetition_hz=SRF_HZ,
+        )
+        assert result.n_sweeps_rejected == 1
+        # The rejected sweep's range_spectrum row is now identically
+        # zero, AND that means its column at every range bin
+        # contributes zero to the slow-time vector.  Verify.
+        assert np.all(result.range_spectrum[bad_sweep_idx] == 0)
+        # Other rows retain non-zero content.
+        for i in range(n_sweeps):
+            if i != bad_sweep_idx:
+                assert np.any(result.range_spectrum[i] != 0)
+
+    def test_multiple_contaminated_sweeps_rejected(self):
+        n_sweeps = 8
+        rx = _synth_chirp(
+            n_total_samples=n_sweeps * N_SAMPLES,
+            target_delays_s=[1000.0 / C_KM_PER_S],
+            target_amplitudes=[1.0],
+        )
+        rng = np.random.default_rng(seed=42)
+        bad = [1, 5]
+        for idx in bad:
+            burst = 5.0 * (
+                rng.standard_normal(N_SAMPLES)
+                + 1j * rng.standard_normal(N_SAMPLES)
+            ).astype(np.complex64)
+            rx[idx * N_SAMPLES:(idx + 1) * N_SAMPLES] += burst
+
+        result = dechirp(
+            rx,
+            sample_rate_hz=SAMPLE_RATE_HZ,
+            sweep_rate_hz_per_s=SWEEP_RATE_HZ_PER_S,
+            sweep_repetition_hz=SRF_HZ,
+        )
+        assert result.n_sweeps_rejected == 2
+        for idx in bad:
+            assert np.all(result.range_spectrum[idx] == 0)
+
+    def test_rejected_sweep_does_not_corrupt_range_profile(self):
+        """The whole point of the pre-filter: a sweep-level contamination
+        event should NOT push spurious power into range_profile (which
+        peak detection uses).  Compare profile peak ranges with and
+        without an injected bad sweep — they should match closely."""
+        n_sweeps = 8
+        target_range_km = 1000.0
+        rx_clean = _synth_chirp(
+            n_total_samples=n_sweeps * N_SAMPLES,
+            target_delays_s=[target_range_km / C_KM_PER_S],
+            target_amplitudes=[1.0],
+        )
+        result_clean = dechirp(
+            rx_clean,
+            sample_rate_hz=SAMPLE_RATE_HZ,
+            sweep_rate_hz_per_s=SWEEP_RATE_HZ_PER_S,
+            sweep_repetition_hz=SRF_HZ,
+        )
+        ranges_clean, prof_clean = positive_range_window(
+            result_clean, range_profile(result_clean),
+        )
+        peak_idx_clean = int(np.argmax(prof_clean))
+
+        # Same signal + one bad sweep.
+        rng = np.random.default_rng(seed=99)
+        rx_dirty = rx_clean.copy()
+        burst = 5.0 * (
+            rng.standard_normal(N_SAMPLES)
+            + 1j * rng.standard_normal(N_SAMPLES)
+        ).astype(np.complex64)
+        rx_dirty[4 * N_SAMPLES:5 * N_SAMPLES] += burst
+
+        result_dirty = dechirp(
+            rx_dirty,
+            sample_rate_hz=SAMPLE_RATE_HZ,
+            sweep_rate_hz_per_s=SWEEP_RATE_HZ_PER_S,
+            sweep_repetition_hz=SRF_HZ,
+        )
+        assert result_dirty.n_sweeps_rejected == 1
+        ranges_dirty, prof_dirty = positive_range_window(
+            result_dirty, range_profile(result_dirty),
+        )
+        peak_idx_dirty = int(np.argmax(prof_dirty))
+        # Peak should be at the same range (within one bin) — the pre-
+        # filter removed the bad sweep so the genuine target dominates.
+        assert abs(
+            ranges_clean[peak_idx_clean] - ranges_dirty[peak_idx_dirty]
+        ) < 25.0
+
+    def test_n_sweeps_rejected_field_on_result(self):
+        """The DechirpResult dataclass must expose n_sweeps_rejected;
+        schema-drift catch."""
+        rx = _synth_chirp(
+            n_total_samples=4 * N_SAMPLES,
+            target_delays_s=[500.0 / C_KM_PER_S],
+            target_amplitudes=[1.0],
+        )
+        result = dechirp(
+            rx,
+            sample_rate_hz=SAMPLE_RATE_HZ,
+            sweep_rate_hz_per_s=SWEEP_RATE_HZ_PER_S,
+            sweep_repetition_hz=SRF_HZ,
+        )
+        # Field exists; it's an int; non-negative.
+        assert isinstance(result.n_sweeps_rejected, int)
+        assert result.n_sweeps_rejected >= 0
+
+    def test_bad_sweep_mask_matches_n_sweeps_rejected(self):
+        """The bad_sweep_mask (1D bool, length M) and n_sweeps_rejected
+        must agree by construction.  Scintillation consumes the mask
+        as ``pre_rejected_mask``; mismatch would corrupt the
+        coordination between the two MAD stages."""
+        n_sweeps = 8
+        rx = _synth_chirp(
+            n_total_samples=n_sweeps * N_SAMPLES,
+            target_delays_s=[1000.0 / C_KM_PER_S],
+            target_amplitudes=[1.0],
+        )
+        rng = np.random.default_rng(seed=7)
+        for idx in (2, 5):
+            burst = 5.0 * (
+                rng.standard_normal(N_SAMPLES)
+                + 1j * rng.standard_normal(N_SAMPLES)
+            ).astype(np.complex64)
+            rx[idx * N_SAMPLES:(idx + 1) * N_SAMPLES] += burst
+        result = dechirp(
+            rx,
+            sample_rate_hz=SAMPLE_RATE_HZ,
+            sweep_rate_hz_per_s=SWEEP_RATE_HZ_PER_S,
+            sweep_repetition_hz=SRF_HZ,
+        )
+        assert result.bad_sweep_mask is not None
+        assert result.bad_sweep_mask.shape == (n_sweeps,)
+        assert result.bad_sweep_mask.dtype == bool
+        assert int(result.bad_sweep_mask.sum()) == result.n_sweeps_rejected
+        # The zeroed rows in range_spectrum align with True positions
+        # in the mask.
+        for i in range(n_sweeps):
+            if result.bad_sweep_mask[i]:
+                assert np.all(result.range_spectrum[i] == 0)

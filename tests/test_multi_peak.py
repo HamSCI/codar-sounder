@@ -237,6 +237,7 @@ class TestChRowBuilder:
             timestamp=ts, detection=detection, fix=fix,
             scintillation=scint,
             peak_index=0, peak_count=1,
+            dechirp_sweeps_rejected=2,
         )
         # All columns of the codar.spots HamSCI sink row (v0.5).
         expected_cols = {
@@ -259,6 +260,8 @@ class TestChRowBuilder:
             # v0.6: σ_φ diagnostics (linear/quadratic + underfit ratio).
             "sigma_phi_linear_rad", "sigma_phi_quadratic_rad",
             "sigma_phi_underfit_ratio",
+            # v0.6.1: per-sweep MAD pre-filter rejection count.
+            "dechirp_sweeps_rejected",
         }
         assert set(row.keys()) == expected_cols
         assert row["host_call"] == "AC0G"
@@ -284,6 +287,7 @@ class TestChRowBuilder:
         assert row["sigma_phi_linear_rad"] == 0.07
         assert row["sigma_phi_quadratic_rad"] == 0.05
         assert row["sigma_phi_underfit_ratio"] == 1.4
+        assert row["dechirp_sweeps_rejected"] == 2
 
 
 # ── pipeline writes both JSONL and CH ────────────────────────────────────────
@@ -399,6 +403,10 @@ class TestPipelineEmitsCh:
             assert row["sigma_phi_quadratic_rad"] == pytest.approx(
                 row["sigma_phi_rad"], rel=1e-9
             )
+            # v0.6.1: per-sweep MAD pre-filter count.  Clean synthetic
+            # CPI should have 0 sweeps rejected; the field type is int.
+            assert isinstance(row["dechirp_sweeps_rejected"], int)
+            assert row["dechirp_sweeps_rejected"] >= 0
         finally:
             pipeline.close()
 

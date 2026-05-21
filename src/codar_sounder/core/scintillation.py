@@ -116,6 +116,7 @@ which is the opposite of what scintillation monitoring wants.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 
 import numpy as np
 
@@ -256,6 +257,7 @@ def compute_scintillation(
     *,
     sample_rate_hz: float,
     min_samples: int = DEFAULT_MIN_SAMPLES,
+    pre_rejected_mask: Optional[np.ndarray] = None,
 ) -> ScintillationResult:
     """Compute S4 + σ_φ from one propagation mode's complex slow-time vector.
 
@@ -268,6 +270,14 @@ def compute_scintillation(
             for a per-CPI extraction).  Used to convert the detrended
             linear phase slope into ``mode_doppler_hz``.
         min_samples: refuse to classify below this many samples.
+        pre_rejected_mask: optional bool array, same length as
+            ``slow_time``.  ``True`` at sample positions already
+            rejected upstream (e.g., zeroed by ``dechirp``'s per-sweep
+            MAD pre-filter).  Excluded from the per-peak MAD test so
+            their zeros don't pollute the MAD scale.
+            ``n_outliers_rejected`` counts only the additional
+            rejections this function performed, not the pre-rejected
+            count.
 
     Returns:
         :class:`ScintillationResult`.  Never raises — pathological
@@ -285,6 +295,24 @@ def compute_scintillation(
     amplitudes = np.abs(slow_time)
     intensity = amplitudes.astype(np.float64) ** 2
 
+    # ─── Upstream rejection mask (v0.6.1) ────────────────────────────
+    # Samples already zeroed by dechirp's per-sweep MAD pre-filter are
+    # excluded from the per-peak MAD calculation here.  Otherwise the
+    # embedded zeros would pollute the MAD scale (raising the
+    # threshold so MAD-on-intensity may not catch them itself), and
+    # the same sample could be implicitly double-counted between the
+    # two stages.
+    if pre_rejected_mask is not None:
+        pre_rejected_mask = np.asarray(pre_rejected_mask, dtype=bool)
+        if pre_rejected_mask.shape != (n_input,):
+            raise ValueError(
+                f"pre_rejected_mask shape {pre_rejected_mask.shape} "
+                f"must match slow_time length {n_input}"
+            )
+        upstream_keep = ~pre_rejected_mask
+    else:
+        upstream_keep = np.ones(n_input, dtype=bool)
+
     # ─── MAD-based outlier rejection (v0.5.1) ────────────────────────
     # A single contaminated sweep (broadband spectral leakage from an
     # unusable matched-filter row) puts one anomalously-large
@@ -300,17 +328,36 @@ def compute_scintillation(
     # MAD asymptotically, so the threshold is consistent across
     # both branches.  Both-zero (perfectly uniform input) means
     # there's nothing to reject — keep everything.
-    deviations = np.abs(intensity - float(np.median(intensity)))
-    mad_intensity = float(np.median(deviations))
-    if mad_intensity > 0.0:
-        scale = mad_intensity
+    #
+    # Compute MAD statistics on the upstream-kept samples only so
+    # upstream zeros don't drag the median or inflate MAD.
+    intensity_for_mad = intensity[upstream_keep]
+    if intensity_for_mad.size > 0:
+        deviations_kept = np.abs(
+            intensity_for_mad - float(np.median(intensity_for_mad))
+        )
+        mad_intensity = float(np.median(deviations_kept))
+        if mad_intensity > 0.0:
+            scale = mad_intensity
+        else:
+            scale = 1.2533 * float(np.mean(deviations_kept))
     else:
-        scale = 1.2533 * float(np.mean(deviations))
+        scale = 0.0
+    # Apply the threshold to all input positions, but only positions
+    # that are upstream-kept can possibly be retained.  This
+    # automatically forces zeros (upstream-rejected) out of the keep
+    # set.
     if scale > 0.0:
-        keep = deviations <= MAD_REJECTION_K * scale
+        deviations_full = np.abs(
+            intensity - float(np.median(intensity_for_mad))
+        )
+        keep = upstream_keep & (deviations_full <= MAD_REJECTION_K * scale)
     else:
-        keep = np.ones(n_input, dtype=bool)
-    n_outliers_rejected = int(n_input - int(keep.sum()))
+        keep = upstream_keep.copy()
+    # n_outliers_rejected counts only the *additional* rejection this
+    # function performed beyond the upstream mask, so the two stages'
+    # rejection counts don't double-add.
+    n_outliers_rejected = int(int(upstream_keep.sum()) - int(keep.sum()))
 
     # Re-check the floor against the *retained* sample count — if
     # outlier rejection pushes us below min_samples, we don't have

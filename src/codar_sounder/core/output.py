@@ -37,6 +37,7 @@ Schema (v0.5):
     sigma_phi_linear_rad             σ_φ from linear detrend (v0.6 diagnostic)
     sigma_phi_quadratic_rad          σ_φ from quadratic detrend (= sigma_phi_rad)
     sigma_phi_underfit_ratio         linear/quadratic ratio; >>1 → phase curvature
+    dechirp_sweeps_rejected          sweeps zeroed by per-sweep MAD pre-filter (v0.6.1)
 
   Scintillation fields are computed per-CPI per-peak from the
   pre-Doppler-FFT range-spectrum column at the peak's range bin — one
@@ -114,6 +115,7 @@ class JsonlWriter:
         sweep_rate_hz_per_s: float,
         peak_index: int = 0,
         peak_count: int = 1,
+        dechirp_sweeps_rejected: int = 0,
     ) -> Path:
         """Write one record and return the path it landed in.
 
@@ -176,6 +178,7 @@ class JsonlWriter:
                 float(scintillation.sigma_phi_quadratic_rad),
             "sigma_phi_underfit_ratio":
                 round(scintillation.sigma_phi_underfit_ratio, 3),
+            "dechirp_sweeps_rejected": int(dechirp_sweeps_rejected),
         }
         fh = self._ensure_open(timestamp)
         fh.write(json.dumps(record, separators=(",", ":")) + "\n")
