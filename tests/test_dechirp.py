@@ -19,6 +19,8 @@ from codar_sounder.core.dechirp import (
     dechirp,
     make_replica,
     positive_range_window,
+    positive_to_raw_index_map,
+    raw_bin_from_positive,
     range_profile,
 )
 
@@ -239,8 +241,26 @@ class TestDechirpOutputShape:
         )
         assert isinstance(result, DechirpResult)
         assert result.range_doppler.shape == (4, N_SAMPLES)
+        assert result.range_spectrum.shape == (4, N_SAMPLES)
         assert result.range_axis_km.shape == (N_SAMPLES,)
         assert result.doppler_axis_hz.shape == (4,)
+
+    def test_range_spectrum_is_complex64(self):
+        """v0.5: scintillation path consumes ``range_spectrum[:, raw_bin]``;
+        complex64 halves the per-CPI memory vs. numpy's default
+        complex128 FFT output without giving up useful precision."""
+        rx = _synth_chirp(
+            n_total_samples=4 * N_SAMPLES,
+            target_delays_s=[500.0 / C_KM_PER_S],
+            target_amplitudes=[1.0],
+        )
+        result = dechirp(
+            rx,
+            sample_rate_hz=SAMPLE_RATE_HZ,
+            sweep_rate_hz_per_s=SWEEP_RATE_HZ_PER_S,
+            sweep_repetition_hz=SRF_HZ,
+        )
+        assert result.range_spectrum.dtype == np.complex64
 
     def test_short_input_raises(self):
         rx = np.zeros(100, dtype=np.complex64)
@@ -397,3 +417,65 @@ class TestTDMASeparation:
             f"TX_B peak {10*np.log10(p_at_b):.1f} dB vs TX_A "
             f"{10*np.log10(p_at_a):.1f} dB; expected ≥10 dB suppression"
         )
+
+
+# ---------------------------------------------------------------------------
+# Positive-sorted → raw FFT-bin index lookup (v0.5; scintillation path).
+# ---------------------------------------------------------------------------
+
+class TestRawBinFromPositive:
+    """The scintillation slice into ``range_spectrum`` needs the raw
+    FFT-bin index, but ``find_f_region_peaks`` returns indices into the
+    positive-sorted range profile out of ``positive_range_window``.
+    These tests verify the mapping is consistent in both directions.
+    """
+
+    def _result(self) -> DechirpResult:
+        rx = _synth_chirp(
+            n_total_samples=4 * N_SAMPLES,
+            target_delays_s=[500.0 / C_KM_PER_S],
+            target_amplitudes=[1.0],
+        )
+        return dechirp(
+            rx,
+            sample_rate_hz=SAMPLE_RATE_HZ,
+            sweep_rate_hz_per_s=SWEEP_RATE_HZ_PER_S,
+            sweep_repetition_hz=SRF_HZ,
+        )
+
+    def test_index_map_round_trip(self):
+        """For every positive-sorted bin, the mapped raw-axis bin's
+        range value must match the positive-sorted axis at that
+        position."""
+        result = self._result()
+        pos_ranges, _ = positive_range_window(result, range_profile(result))
+        raw_indices = positive_to_raw_index_map(result)
+        # One raw index per positive bin.
+        assert raw_indices.shape == pos_ranges.shape
+        # Each mapped raw range equals the positive-sorted range.
+        for pos_idx in range(pos_ranges.size):
+            raw_idx = int(raw_indices[pos_idx])
+            assert result.range_axis_km[raw_idx] == pytest.approx(
+                pos_ranges[pos_idx], rel=1e-12
+            )
+
+    def test_scalar_helper_matches_vector_lookup(self):
+        result = self._result()
+        raw_indices = positive_to_raw_index_map(result)
+        # Sample a handful of positive indices including endpoints.
+        for pos_idx in [0, 1, raw_indices.size // 2, raw_indices.size - 1]:
+            assert raw_bin_from_positive(result, pos_idx) == int(
+                raw_indices[pos_idx]
+            )
+
+    def test_slow_time_at_peak_bin_is_finite(self):
+        """The slow-time column at any positive bin's raw index must be
+        a finite complex64 M-vector — that's what scintillation reads."""
+        result = self._result()
+        raw_indices = positive_to_raw_index_map(result)
+        for pos_idx in [0, raw_indices.size // 2, raw_indices.size - 1]:
+            raw_idx = int(raw_indices[pos_idx])
+            col = result.range_spectrum[:, raw_idx]
+            assert col.shape == (4,)  # M = 4 sweeps in this fixture
+            assert col.dtype == np.complex64
+            assert np.all(np.isfinite(col))

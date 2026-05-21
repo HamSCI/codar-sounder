@@ -48,12 +48,22 @@ class DechirpResult:
 
     Fields:
         range_doppler: complex M×N array — Doppler bins × range bins.
+        range_spectrum: complex M×N array — *pre-slow-time-FFT* range
+            spectrum (matched-filter output per sweep, per range bin).
+            One column ``range_spectrum[:, raw_bin]`` is the slow-time
+            complex amplitude time series at that range bin's
+            propagation mode — the natural input for scintillation
+            indices (see :mod:`codar_sounder.core.scintillation`).
+            Stored as complex64 to halve the per-CPI memory cost vs.
+            numpy's default complex128 FFT output; precision is still
+            ~24 bits, far above what amplitude/phase statistics need.
         range_axis_km: real N-vector — group range (km) per FFT bin.
         doppler_axis_hz: real M-vector — Doppler frequency (Hz) per slow-time bin.
         sweep_rate_hz_per_s: the sweep rate used (echoed for downstream consumers).
         sample_rate_hz: the sample rate used (likewise).
     """
     range_doppler: np.ndarray
+    range_spectrum: np.ndarray
     range_axis_km: np.ndarray
     doppler_axis_hz: np.ndarray
     sweep_rate_hz_per_s: float
@@ -182,7 +192,11 @@ def dechirp(
     dechirped = rx_matrix * np.conj(replica)
 
     # FFT along the fast-time axis → range spectrum per sweep.
-    range_spectrum = np.fft.fft(dechirped, axis=1)
+    # Downcast to complex64 immediately: numpy's FFT returns complex128
+    # even for complex64 input, and we don't need the extra precision
+    # downstream (amplitude/phase statistics are well within complex64
+    # range).  Halves the per-CPI memory footprint of `range_spectrum`.
+    range_spectrum = np.fft.fft(dechirped, axis=1).astype(np.complex64)
 
     # FFT along the slow-time axis → Doppler resolution per range bin.
     range_doppler = np.fft.fftshift(np.fft.fft(range_spectrum, axis=0), axes=0)
@@ -202,6 +216,7 @@ def dechirp(
 
     return DechirpResult(
         range_doppler=range_doppler,
+        range_spectrum=range_spectrum,
         range_axis_km=range_axis_km,
         doppler_axis_hz=doppler_axis_hz,
         sweep_rate_hz_per_s=sweep_rate_hz_per_s,
@@ -235,3 +250,44 @@ def positive_range_window(
         result.range_axis_km[pos_mask][order],
         profile[pos_mask][order],
     )
+
+
+def positive_to_raw_index_map(result: DechirpResult) -> np.ndarray:
+    """Return the index map from positive-sorted bin → raw FFT bin.
+
+    ``find_f_region_peaks`` returns each peak's ``bin_index`` as an
+    index into the positive-sorted profile that came out of
+    :func:`positive_range_window`.  Slicing into
+    ``result.range_spectrum`` or ``result.range_doppler`` requires the
+    *raw* FFT-bin index (the original axis of those tensors).
+
+    This helper builds the lookup once per CPI::
+
+        raw_indices = positive_to_raw_index_map(result)
+        raw_bin = raw_indices[detection.bin_index]
+        slow_time = result.range_spectrum[:, raw_bin]
+
+    Returns a 1-D ``int64`` array whose length equals the number of
+    positive range bins (typically half of N).
+    """
+    pos_mask = result.range_axis_km >= 0
+    order = np.argsort(result.range_axis_km[pos_mask])
+    return np.where(pos_mask)[0][order]
+
+
+def raw_bin_from_positive(
+    result: DechirpResult, positive_bin_index: int,
+) -> int:
+    """Convert a positive-sorted bin index to its raw FFT-bin index.
+
+    Convenience scalar wrapper around :func:`positive_to_raw_index_map`
+    for one-off lookups.  When converting many indices for the same
+    ``DechirpResult`` (e.g. one per detected peak within a CPI), call
+    ``positive_to_raw_index_map(result)`` once and index into the
+    returned array — that avoids recomputing the mapping per peak.
+
+    Precondition: ``0 <= positive_bin_index < (number of positive
+    range bins)``.  Raises ``IndexError`` otherwise.
+    """
+    raw_indices = positive_to_raw_index_map(result)
+    return int(raw_indices[positive_bin_index])

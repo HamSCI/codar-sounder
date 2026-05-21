@@ -223,12 +223,20 @@ class TestChRowBuilder:
             group_range_uncertainty_km=pipeline.group_range_uncertainty_km,
         )
         from datetime import datetime, timezone
+        from codar_sounder.core.scintillation import ScintillationResult
+        scint = ScintillationResult(
+            s4_index=0.12, s4_severity="weak",
+            sigma_phi_rad=0.05, sigma_phi_severity="weak",
+            scintillation_event=False, confidence=1.0,
+            n_samples=60, n_outliers_rejected=0, mode_doppler_hz=0.02,
+        )
         ts = datetime(2026, 5, 7, 12, 30, tzinfo=timezone.utc)
         row = pipeline._ch_row_for(
             timestamp=ts, detection=detection, fix=fix,
+            scintillation=scint,
             peak_index=0, peak_count=1,
         )
-        # All columns of the codar.spots HamSCI sink row.
+        # All columns of the codar.spots HamSCI sink row (v0.5).
         expected_cols = {
             "time", "host_call", "host_grid", "radiod_id", "instance",
             "processing_version", "station_id", "oblique_freq_hz",
@@ -239,6 +247,13 @@ class TestChRowBuilder:
             "equivalent_vertical_freq_mhz",
             "equivalent_vertical_freq_uncertainty_mhz",
             "takeoff_zenith_deg",
+            # v0.5 scintillation columns:
+            "s4_index", "s4_severity",
+            "sigma_phi_rad", "sigma_phi_severity",
+            "scintillation_event", "scintillation_confidence",
+            "scintillation_samples", "mode_doppler_hz",
+            # v0.5.1: MAD outlier rejection count.
+            "scintillation_outliers_rejected",
         }
         assert set(row.keys()) == expected_cols
         assert row["host_call"] == "AC0G"
@@ -250,6 +265,16 @@ class TestChRowBuilder:
         assert row["peak_index"] == 0
         assert row["peak_count"] == 1
         assert row["oblique_freq_hz"] == 4537180
+        # Scintillation values round-trip without re-rounding.
+        assert row["s4_index"] == 0.12
+        assert row["s4_severity"] == "weak"
+        assert row["sigma_phi_rad"] == 0.05
+        assert row["sigma_phi_severity"] == "weak"
+        assert row["scintillation_event"] is False
+        assert row["scintillation_confidence"] == 1.0
+        assert row["scintillation_samples"] == 60
+        assert row["scintillation_outliers_rejected"] == 0
+        assert row["mode_doppler_hz"] == 0.02
 
 
 # ── pipeline writes both JSONL and CH ────────────────────────────────────────
@@ -336,6 +361,26 @@ class TestPipelineEmitsCh:
             )
             assert row["peak_count"] >= 1
             assert row["peak_index"] == 0
+            # v0.5 scintillation fields land on the sink row, with sane
+            # values for a clean synthetic CPI (no scintillation by
+            # construction): severities classified (not "unknown"),
+            # confidence saturated at 1.0 since M=60 ≥ 30, no event.
+            assert row["s4_severity"] in {
+                "weak", "moderate", "strong", "unknown",
+            }
+            assert row["sigma_phi_severity"] in {
+                "weak", "moderate", "strong", "unknown",
+            }
+            assert row["scintillation_samples"] >= 10
+            assert row["scintillation_event"] is False
+            assert 0.0 <= row["scintillation_confidence"] <= 1.0
+            assert np.isfinite(row["s4_index"])
+            assert row["s4_index"] >= 0.0
+            assert np.isfinite(row["sigma_phi_rad"])
+            assert row["sigma_phi_rad"] >= 0.0
+            # v0.5.1: rejected count is non-negative; clean synthetic
+            # signal should produce 0 (no spike to reject).
+            assert row["scintillation_outliers_rejected"] >= 0
         finally:
             pipeline.close()
 

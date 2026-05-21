@@ -14,11 +14,12 @@ single-frequency oblique ionospheric sounding.
 
 ## Status
 
-**v0.4.0 — feature-complete single-antenna release.**  Contract
-surfaces (`inventory --json`, `validate --json`, `version --json`,
+**v0.5.0 — adds ITU-R P.531 scintillation indices on top of v0.4's
+feature-complete single-antenna release.**  Contract surfaces
+(`inventory --json`, `validate --json`, `version --json`,
 `config init|edit`, `tdma-scan`) work end-to-end against the sigmond
 v0.6 contract.  The daemon (`core/daemon.py`) routes IQ → dechirp →
-trace → invert → JSONL+CH writer per CPI:
+trace → invert → scintillation → JSONL+CH writer per CPI:
 
   * **Dechirp** (`core/dechirp.py`) — Kaeppler §2.1: windowed quadratic-
     phase replica, range-Doppler FFT, beat → group-range conversion;
@@ -37,11 +38,51 @@ trace → invert → JSONL+CH writer per CPI:
     one record per detected peak with `peak_index` / `peak_count` /
     `mode_layer`.  Remains the canonical L1 artefact (Kaeppler-
     compatible Zenodo schema).
+  * **Scintillation** (`core/scintillation.py`, v0.5+) — per peak per
+    CPI, the pre-Doppler-FFT range-bin slow-time vector is reduced to
+    ITU-R P.531 S4 (amplitude) and σ_φ (phase) indices with severity
+    bins (weak / moderate / strong / unknown).  A propagation-mode-
+    resolved companion to hf-timestd's vertical-incidence WWV
+    scintillation: oblique geometry, mode-by-mode.
   * **HamSCI sink** (CONTRACT v0.6 §17) — when the local HamSCI sink
     (a SQLite store-and-forward queue managed by sigmond) is in play,
     every per-peak record is also written to `codar.spots` via
     `sigmond.hamsci_sink.Writer`.  The sink path is additive; hosts
     without it stay file-only with no extra moving parts.
+
+**v0.5.0 highlights:**
+
+  * **S4 / σ_φ per peak per CPI** — eight new fields on every JSONL
+    record and `codar.spots` row: `s4_index`, `s4_severity`,
+    `sigma_phi_rad`, `sigma_phi_severity`, `scintillation_event`,
+    `scintillation_confidence`, `scintillation_samples`,
+    `mode_doppler_hz`.  Computed from the M-sample slow-time complex
+    amplitude vector at each peak's range bin (M = `coherent_seconds`
+    × `sweep_repetition_hz`; default M = 60).
+  * **Severity bins** (strict-less-than): S4 < 0.3 weak / < 0.6
+    moderate / ≥ 0.6 strong (ITU-R P.531 canonical); σ_φ < 0.5 weak /
+    < 1.0 moderate / ≥ 1.0 strong (v0.5.2 HF-recalibrated — ITU-R's
+    0.2/0.5 thresholds were calibrated for single-mode narrowband
+    GNSS/SHF signals, but HF oblique multipath has an intrinsic
+    phase-incoherence floor of ~0.4-0.6 rad even on quiet days).
+    S4 > 1.0 (saturated scintillation) is *not* clipped.  Event gate
+    fires when S4 ≥ 0.3 or σ_φ ≥ 0.5.
+  * **Cadence caveat** — at default CPI = 60 s, SRF = 1 Hz, the linear
+    detrend acts as an effective ≈ 0.017 Hz high-pass (= 1/CPI),
+    *not* the canonical ITU-R 0.1 Hz used by GNSS receivers.  Cross-
+    comparisons to GNSS σ_φ should account for this.  The chosen
+    linear (not quadratic) detrend is correct at 60 s: TIDs at
+    5-60 min period are well-approximated as linear, while genuine
+    30-60 s scintillation survives unscathed.
+  * **Confidence model**: `min(1, n_samples / 30)` with a NaN/Inf
+    guard.  Below 10 slow-time samples (or a clutter-mask null with
+    `mean_intensity < 1e-30`) the indices are zeroed and severities
+    are `"unknown"`.  Deliberately *not* penalised by S4-correlated
+    coefficient-of-variation — that would suppress confidence on real
+    strong events.
+  * **No contract bump** — `CONTRACT_VERSION` stays 0.6; the new
+    fields are additive payload-schema evolution, not contract-shape
+    change.
 
 **v0.4.0 highlights:**
 

@@ -10,7 +10,7 @@ the geometry that produced the inversion.  Downstream consumers
 (HamSCI archive, TID/space-weather post-processors) parse one record
 per detected peak.
 
-Schema (v0.4):
+Schema (v0.5):
     timestamp                        ISO-8601 UTC
     client                           "codar-sounder"
     radiod_id, radiod_status_dns     identity
@@ -24,6 +24,21 @@ Schema (v0.4):
     virtual_height_km (+ uncertainty)
     equivalent_vertical_freq_mhz (+ uncertainty)
     takeoff_zenith_deg
+    s4_index                         amplitude scintillation, ITU-R P.531 (≥0;
+                                     may exceed 1.0 for saturated scintillation)
+    s4_severity                      "weak"/"moderate"/"strong"/"unknown"
+    sigma_phi_rad                    phase scintillation, radians (≥0)
+    sigma_phi_severity               same bins as s4_severity
+    scintillation_event              true iff S4 ≥ 0.3 or σ_φ ≥ 0.2
+    scintillation_confidence         0..1, saturates at 30 slow-time samples
+    scintillation_samples            slow-time samples retained after MAD reject (v0.5)
+    scintillation_outliers_rejected  count dropped by MAD filter (v0.5.1)
+    mode_doppler_hz                  linear-Doppler shift removed before σ_φ
+
+  Scintillation fields are computed per-CPI per-peak from the
+  pre-Doppler-FFT range-spectrum column at the peak's range bin — one
+  slow-time sample per sweep, M samples per CPI (60 at default
+  CPI=60s, SRF=1Hz).  See ``codar_sounder.core.scintillation``.
 
 Atomic-ish writes: each record is written with a trailing newline and
 ``flush()``.  We don't fsync per-record (would dominate I/O cost on
@@ -44,6 +59,7 @@ from pathlib import Path
 from typing import Any, IO, Optional
 
 from codar_sounder.core.invert import IonosphericFix
+from codar_sounder.core.scintillation import ScintillationResult
 from codar_sounder.core.trace import TraceDetection
 
 log = logging.getLogger(__name__)
@@ -87,6 +103,7 @@ class JsonlWriter:
         timestamp: datetime,
         fix: IonosphericFix,
         detection: TraceDetection,
+        scintillation: ScintillationResult,
         *,
         radiod_status_dns: str,
         oblique_freq_hz: int,
@@ -102,6 +119,14 @@ class JsonlWriter:
         of peaks reported for this CPI.  When the daemon emits one
         record per detected peak, downstream consumers use these to
         regroup peaks back into their parent CPI.
+
+        ``scintillation`` carries the ITU-R P.531 S4 / σ_φ indices
+        computed on this peak's slow-time vector (see
+        :mod:`codar_sounder.core.scintillation`).  The severity strings
+        are canonical: ``s4_index`` and ``sigma_phi_rad`` are written
+        full-precision (no rounding) so a downstream consumer
+        reproducing the severity from the numeric value can do so
+        deterministically across the bin boundaries.
         """
         record: dict[str, Any] = {
             "timestamp": timestamp.astimezone(timezone.utc).isoformat(),
@@ -129,6 +154,18 @@ class JsonlWriter:
                 fix.equivalent_vertical_freq_uncertainty_mhz, 4
             ),
             "takeoff_zenith_deg": round(fix.takeoff_zenith_deg, 2),
+            # Scintillation indices — full precision on the numerics so
+            # readers can reproduce the severity bins deterministically.
+            "s4_index": float(scintillation.s4_index),
+            "s4_severity": scintillation.s4_severity,
+            "sigma_phi_rad": float(scintillation.sigma_phi_rad),
+            "sigma_phi_severity": scintillation.sigma_phi_severity,
+            "scintillation_event": bool(scintillation.scintillation_event),
+            "scintillation_confidence": round(scintillation.confidence, 3),
+            "scintillation_samples": int(scintillation.n_samples),
+            "scintillation_outliers_rejected":
+                int(scintillation.n_outliers_rejected),
+            "mode_doppler_hz": round(scintillation.mode_doppler_hz, 4),
         }
         fh = self._ensure_open(timestamp)
         fh.write(json.dumps(record, separators=(",", ":")) + "\n")

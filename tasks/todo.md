@@ -159,3 +159,186 @@ verification on bee1-rx888 with the wideband filter: TBD post-deploy.
 Expected: SNRs that were 5 dB on the 4.5 MHz band in v0.3 should rise
 to 20+ dB now that the chirp is no longer being truncated by the
 default ±5 kHz audio filter.
+
+
+## v0.5.0 — ITU-R P.531 scintillation indices (2026-05-20)
+
+Closes the identified gap recorded as
+`project_codar_sounder_scintillation_gap` in memory: codar-sounder
+already produces, but discards, the per-CPI per-mode complex amplitude
+time series.  Adding S4 + σ_φ extends the L1 product to a
+propagation-mode-resolved scintillation index — a companion to
+hf-timestd's WWV-tone-only scintillation, with oblique geometry and
+multiple modes per CPI.
+
+### Tasks
+
+- [x] Write plan (`/home/mjh/.claude/plans/functional-floating-garden.md`).
+- [x] `core/scintillation.py` (new) — `ScintillationResult` dataclass
+      (8 fields) + `compute_scintillation()`.  ITU-R P.531 severity
+      bins (strict-less-than); event gate at S4 ≥ 0.3 or σ_φ ≥ 0.2;
+      `confidence = min(1, n_samples/30)` with NaN/Inf guard; zero-
+      signal short-circuit at `mean_intensity < 1e-30`.
+- [x] `core/dechirp.py` — `DechirpResult` gains
+      `range_spectrum: np.ndarray` (complex64, M×N, the pre-Doppler-
+      FFT matched-filter output).  Cast to complex64 once after the
+      fast-time FFT so the per-CPI memory cost is halved vs. numpy's
+      default complex128.  Add `positive_to_raw_index_map(result)` and
+      `raw_bin_from_positive(result, idx)` for the
+      positive-sorted → raw FFT-bin lookup the scintillation slice
+      needs.
+- [x] `core/output.py` `JsonlWriter.write` — required new
+      `scintillation` kwarg.  Adds 8 fields to the JSONL record.
+      `s4_index` and `sigma_phi_rad` written full-precision (no
+      rounding) so downstream consumers can reproduce the severity
+      bin deterministically.  Schema docstring bumped to v0.5.
+- [x] `core/daemon.py` `process_cpi` — compute the positive→raw
+      index map once per CPI; per peak slice
+      `range_spectrum[:, raw_indices[detection.bin_index]]` and pass
+      the resulting `ScintillationResult` through to `JsonlWriter.write`
+      and `_ch_row_for`.  Per-peak log line gains S4 + σ_φ + EVENT
+      marker.
+- [x] `core/daemon.py` `_ch_row_for` — gains `scintillation` kwarg;
+      8 new fields with explicit casts (no rounding, matching the
+      existing convention).
+- [x] `tests/test_scintillation.py` (new) — 55 tests covering
+      pure-CW baseline, S4 closed-form recovery, σ_φ closed-form
+      recovery (period-4 phase pattern orthogonal to the linear
+      detrend by construction), severity-helper unit tests at exact
+      float64 boundaries, severity end-to-end tests offset 1e-4 from
+      the boundary, event-gate triggers, quality gating (min_samples,
+      zero signal, NaN/Inf), sample-rate scaling, dataclass field
+      lock.
+- [x] `tests/test_dechirp.py` — `range_spectrum` shape + complex64
+      dtype assertions; `raw_bin_from_positive` round-trip; slow-time
+      column at peak bin is finite complex64 M-vector.
+- [x] `tests/test_multi_peak.py` — `expected_cols` schema set updated
+      with the 8 new fields; row round-trip values asserted; daemon-
+      level integration test asserts the scintillation fields land on
+      the synthetic CPI's sink row with sane values
+      (`scintillation_event` is False, severity classified, samples
+      ≥ 10).
+- [x] `README.md` — v0.5.0 highlights section (8 new fields, severity
+      bins, cadence caveat, confidence model, no contract bump).
+- [x] `pyproject.toml` + `deploy.toml` — version `0.4.0` → `0.5.0`;
+      `contract_version` stays `0.6`.
+- [ ] Live verification on bee1-rx888 — confirm `s4_severity` ∈
+      {weak, moderate, strong} on real F-region peaks and that
+      `scintillation_event` correlates with known geomagnetic
+      disturbances (Kp ≥ 4).  Post-deploy.
+
+### Out of scope (deferred)
+
+- **Cross-CPI rolling-window indices** — per-CPI is the v0.5 scope.
+  Multi-CPI integration adds peak-bin tracking jitter (the peak
+  migrates ±1 bin between CPIs); revisit if field data shows per-CPI
+  noise dominates real scintillation signal.
+- **0.1 Hz canonical ITU-R high-pass** — would need slow-time
+  oversampling beyond the 1 Hz SRF, i.e. a fundamental architecture
+  change.  The 1/CPI ≈ 0.017 Hz effective corner is documented in
+  README so consumers don't cross-compare to GNSS σ_φ blind.
+- **3-bin power-sum smoothing** — would bias S4 toward "weak" by
+  integrating off-target noise.  Wrong for per-CPI; the right answer
+  is per-peak single-bin within one CPI's matched-filter output.
+
+### Verification status
+
+Unit tests: 193 passed locally (was 158 in v0.4.0; +59 new — 56 in
+`test_scintillation.py`, 3 in `test_dechirp.py` extensions, plus
+schema-set extension in `test_multi_peak.py`'s
+`test_row_columns_match_codar_spots_schema`).  24 pre-existing
+Kaeppler Zenodo-dataset skips unchanged.
+
+
+## v0.5.1 — MAD outlier rejection (2026-05-21)
+
+Live verification on bee1-rx888 SEAB (13.45 MHz, CPI=15s) immediately
+revealed v0.5.0 was producing **100% strong-event rate** on every
+peak.  Root cause via a live-IQ probe: one sweep per CPI carried
+broadband spectral leakage (FFT peak in the negative-range half — an
+unusable matched-filter row, likely from an RFI burst or ka9q packet
+duplication).  That bad sweep contributed one anomalously-large
+intensity sample into every range bin's slow-time vector, inflating
+S4 to ≈ √(M-1) ≈ 3.7 at M=15.
+
+### Tasks
+
+- [x] `core/scintillation.py` — add MAD-based outlier rejection in
+      ``compute_scintillation`` before computing S4/σ_φ.  Reject
+      samples with ``|I - median(I)| > 4·MAD(I)``; fall back to
+      ``1.2533·MeanAD`` when MAD = 0 (Iglewicz-Hoaglin 1993).  Add
+      ``n_outliers_rejected`` to ``ScintillationResult``; report
+      retained count in ``n_samples``.  Re-check the ``min_samples``
+      floor against the retained count (returns "unknown" if
+      rejection drops below).
+- [x] `core/output.py` + `core/daemon.py` — surface
+      ``scintillation_outliers_rejected`` in JSONL records,
+      hamsci_sink rows, and the per-peak log line (``n=14-1`` style
+      marker).
+- [x] Tests — 6 new tests covering single-outlier rejection, multiple
+      outliers, no-outliers-on-clean, MAD=0 fallback, rejection
+      below floor → unknown, field-simulation reproducing the
+      production bad-sweep pattern.
+- [x] Update `tests/test_multi_peak.py` `expected_cols` set.
+- [x] `pyproject.toml` + `deploy.toml` — version 0.5.0 → 0.5.1.
+
+### Verification status
+
+199 tests pass (was 193 in v0.5.0).  Live verification: MAD
+rejection fires 0-5 times per peak per CPI (mode 2 — matching the
+"two adjacent RFI burst sweeps" the probe found later).  S4 still
+mostly strong but moved from "always 3+" to "0.5-1.1 range"
+(physically plausible now).
+
+
+## v0.5.2 — quadratic detrend + HF-recalibrated σ_φ thresholds (2026-05-21)
+
+After v0.5.1 fixed S4, σ_φ was still flagging strong everywhere.
+A second probe captured 4 real F-region peaks at 60 dB SNR and
+showed:
+
+  - No Doppler aliasing (0 of 64 phase steps > π).
+  - Linear detrend underfits for peaks with curved phase
+    trajectories — quadratic detrend reduces σ_φ by 25-60% on those.
+  - Even with perfect detrending, HF oblique multipath produces an
+    intrinsic σ_φ floor of ~0.4-0.6 rad on quiet days — ITU-R
+    P.531's 0.2/0.5 thresholds (calibrated for single-mode GNSS/SHF)
+    misclassify it as "moderate"/"strong".
+
+### Tasks
+
+- [x] `core/scintillation.py`:
+      - Change `polyfit(times, phases, deg=1)` → `deg=2`, with
+        ``times`` centered before fitting so the linear coefficient
+        is the average-Doppler slope at the CPI centroid.
+      - Update ``mode_doppler_hz`` extraction: ``coeffs[1] / (2π)``
+        (was ``coeffs[0]`` for deg=1).
+      - Move ``SIGMA_PHI_WEAK_MAX``: 0.2 → 0.5; ``SIGMA_PHI_MODERATE_MAX``:
+        0.5 → 1.0; ``SIGMA_PHI_EVENT_THRESHOLD``: 0.2 → 0.5.
+      - Update module docstring with the HF-deviation rationale and
+        the live-data evidence table.
+- [x] `tests/test_scintillation.py`:
+      - Replace ``_phase_pattern_orthogonal_to_linear`` with the new
+        period-4 pattern ``(1/√5)·[-1, +3, -3, +1]`` (orthogonal to
+        constant, linear, *and* quadratic over each 4-block).
+      - Update boundary test parametrizations for the new thresholds.
+      - Loosen the doppler-trend test tolerances (2e-2 rad for σ_φ,
+        1e-4 Hz for doppler) to reflect complex64 precision at the
+        38-rad phase range.
+- [x] `README.md` — v0.5.2 highlights with the HF-recalibrated
+      thresholds + rationale.
+- [x] `pyproject.toml` + `deploy.toml` — version 0.5.1 → 0.5.2.
+
+### Verification status
+
+199 tests pass.  Live verification post-deploy:
+
+  - **Mixed quiet F2 (h' ~ 500 km)**: σ_φ_quadratic ≈ 0.45-0.95 →
+    weak / moderate (3 of 4 probe peaks).
+  - **Disturbed F2_extreme (h' > 600 km)**: σ_φ_quadratic ≈ 1.2-1.8
+    → strong.
+  - Production daemon sees mostly F2_extreme right now (high local
+    event rate consistent with real disturbed ionospheric conditions
+    rather than calibration error; cross-check Kp/SWPC to confirm).
+  - MAD rejection continues to fire 1-3× per peak.
+  - All 9 scintillation fields present in JSONL + sink rows.

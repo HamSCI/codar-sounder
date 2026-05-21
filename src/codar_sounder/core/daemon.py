@@ -46,9 +46,18 @@ from pathlib import Path
 from typing import Optional
 
 from codar_sounder.config import haversine_km, transmitters
-from codar_sounder.core.dechirp import dechirp, positive_range_window, range_profile
+from codar_sounder.core.dechirp import (
+    dechirp,
+    positive_range_window,
+    positive_to_raw_index_map,
+    range_profile,
+)
 from codar_sounder.core.invert import invert, group_range_resolution_km
 from codar_sounder.core.output import JsonlWriter
+from codar_sounder.core.scintillation import (
+    ScintillationResult,
+    compute_scintillation,
+)
 from codar_sounder.core.stream import make_iq_source
 from codar_sounder.core.trace import (
     DEFAULT_MAX_PEAKS,
@@ -193,6 +202,13 @@ class _TransmitterPipeline:
                       self.station_id, self.snr_threshold_db)
             return None
 
+        # Build the positive-sorted → raw FFT-bin lookup once per CPI.
+        # find_f_region_peaks returns indices into the positive-sorted
+        # profile; the scintillation slice into range_spectrum needs
+        # the raw FFT-bin index.  Doing this once per CPI (not per
+        # peak) keeps the per-peak loop tight.
+        raw_indices = positive_to_raw_index_map(result)
+
         # CPI timestamp comes from the iq_source (RTP-derived + authority
         # offset for radiod path; wall-clock for synthetic).  Per
         # METROLOGY.md §4.5 RTP-reference invariant — the recorder does
@@ -220,10 +236,23 @@ class _TransmitterPipeline:
                 )
                 continue
 
+            # Per-peak scintillation: slice the pre-Doppler-FFT range-
+            # spectrum at this peak's raw FFT bin to get the M-sample
+            # slow-time complex amplitude time series of *this*
+            # propagation mode, then run the ITU-R P.531 indices on
+            # it.  scintillation never raises (degenerate inputs yield
+            # an "unknown" result with confidence=0).
+            raw_bin = int(raw_indices[detection.bin_index])
+            slow_time = result.range_spectrum[:, raw_bin]
+            scint = compute_scintillation(
+                slow_time, sample_rate_hz=self.sweep_repetition_hz,
+            )
+
             last_path = self.writer.write(
                 timestamp=ts,
                 fix=fix,
                 detection=detection,
+                scintillation=scint,
                 radiod_status_dns=self.radiod_status_dns,
                 oblique_freq_hz=self.center_freq_hz,
                 coherent_seconds=self.coherent_seconds,
@@ -239,6 +268,7 @@ class _TransmitterPipeline:
             if self.ch_writer is not None:
                 row = self._ch_row_for(
                     timestamp=ts, detection=detection, fix=fix,
+                    scintillation=scint,
                     peak_index=peak_index, peak_count=peak_count,
                 )
                 try:
@@ -251,18 +281,25 @@ class _TransmitterPipeline:
 
             log.info(
                 "[%s] peak %d/%d %s P=%.0f km h'=%.0f±%.0f km "
-                "fv=%.3f±%.3f MHz SNR=%.1f dB",
+                "fv=%.3f±%.3f MHz SNR=%.1f dB "
+                "S4=%.2f(%s) σ_φ=%.2f(%s) n=%d-%d%s",
                 self.station_id, peak_index, peak_count, fix.mode_layer,
                 fix.group_range_km, fix.virtual_height_km,
                 fix.virtual_height_uncertainty_km,
                 fix.equivalent_vertical_freq_mhz,
                 fix.equivalent_vertical_freq_uncertainty_mhz,
                 detection.snr_db,
+                scint.s4_index, scint.s4_severity,
+                scint.sigma_phi_rad, scint.sigma_phi_severity,
+                scint.n_samples, scint.n_outliers_rejected,
+                " EVENT" if scint.scintillation_event else "",
             )
         return last_path
 
     def _ch_row_for(
-        self, *, timestamp, detection, fix, peak_index: int, peak_count: int,
+        self, *, timestamp, detection, fix,
+        scintillation: ScintillationResult,
+        peak_index: int, peak_count: int,
     ) -> dict:
         """Build a row for the codar.spots HamSCI sink table.
 
@@ -294,6 +331,19 @@ class _TransmitterPipeline:
             "equivalent_vertical_freq_uncertainty_mhz":
                 float(fix.equivalent_vertical_freq_uncertainty_mhz),
             "takeoff_zenith_deg": float(fix.takeoff_zenith_deg),
+            # ITU-R P.531 scintillation (additive v0.5; see
+            # codar_sounder.core.scintillation).
+            "s4_index":           float(scintillation.s4_index),
+            "s4_severity":        scintillation.s4_severity,
+            "sigma_phi_rad":      float(scintillation.sigma_phi_rad),
+            "sigma_phi_severity": scintillation.sigma_phi_severity,
+            "scintillation_event": bool(scintillation.scintillation_event),
+            "scintillation_confidence":
+                float(scintillation.confidence),
+            "scintillation_samples": int(scintillation.n_samples),
+            "scintillation_outliers_rejected":
+                int(scintillation.n_outliers_rejected),
+            "mode_doppler_hz":    float(scintillation.mode_doppler_hz),
         }
 
     def close(self) -> None:
