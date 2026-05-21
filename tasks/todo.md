@@ -54,7 +54,7 @@ TX's sweep-start time within the period.
       peaks at this hour, well below useful threshold.**  Either the ODU
       group isn't TDMA-distinguishable via single-period cross-correlation,
       or the band is too quiet right now.  See "Field results" below.
-- [ ] Bump pyproject + deploy.toml to 0.3.0; commit; push.
+- [x] Bump pyproject + deploy.toml to 0.3.0; commit; push.
 
 ## Field results — 2026-04-29 evening
 
@@ -222,10 +222,12 @@ multiple modes per CPI.
       bins, cadence caveat, confidence model, no contract bump).
 - [x] `pyproject.toml` + `deploy.toml` — version `0.4.0` → `0.5.0`;
       `contract_version` stays `0.6`.
-- [ ] Live verification on bee1-rx888 — confirm `s4_severity` ∈
-      {weak, moderate, strong} on real F-region peaks and that
-      `scintillation_event` correlates with known geomagnetic
-      disturbances (Kp ≥ 4).  Post-deploy.
+- [x] Live verification on bee1-rx888 — superseded by the
+      v0.5.1 + v0.5.2 cycle below; live deployment exposed real
+      issues (single-bad-sweep contamination, ITU-R-vs-HF threshold
+      mismatch) that drove two patches.  End-to-end data path
+      verified; multi-day Kp correlation remains an open analysis
+      task (not a coding task).
 
 ### Out of scope (deferred)
 
@@ -342,3 +344,61 @@ showed:
     rather than calibration error; cross-check Kp/SWPC to confirm).
   - MAD rejection continues to fire 1-3× per peak.
   - All 9 scintillation fields present in JSONL + sink rows.
+
+
+## v0.6.0 — σ_φ diagnostic fields (2026-05-21)
+
+Follows up the v0.5.2 finding that linear detrend underfits real
+F-region peaks with curved slow-time phase trajectories (TIDs,
+multipath beating, accelerating Doppler).  Rather than choosing
+linear *or* quadratic and hiding the other, expose both as wire
+fields with the ratio as a self-contained underfit detector — a
+TID/multipath-beating signature independent of the σ_φ severity
+classification.
+
+### Tasks
+
+- [x] `core/scintillation.py`:
+      - Compute both linear-detrend and quadratic-detrend σ_φ on each
+        slow-time vector.
+      - Canonical ``sigma_phi_rad`` stays = quadratic (matches v0.5.2
+        production behaviour exactly — no break for downstream
+        readers).
+      - ``ScintillationResult`` gains ``sigma_phi_linear_rad``,
+        ``sigma_phi_quadratic_rad``, ``sigma_phi_underfit_ratio``
+        (= linear / quadratic; ≥ 1 by construction).
+      - Pathological branches (degenerate fit, unknown result) return
+        ratio = 1.0 by convention.
+- [x] `core/output.py` + `core/daemon.py` — 3 new wire fields on
+      JSONL records and ``codar.spots`` rows.
+- [x] Tests:
+      - 6 new ``TestUnderfitRatio`` tests covering: unity for pure
+        CW; unity for constant Doppler; >> 1 for purely-quadratic
+        phase; canonical = quadratic; ratio ≥ 1 across random
+        inputs; unknown-result fallback.
+      - ``test_multi_peak.py`` schema-set extension + integration
+        assertions.
+- [x] `README.md` v0.6.0 highlights.
+- [x] `pyproject.toml` + `deploy.toml` — version 0.5.2 → 0.6.0.
+      `contract_version` stays 0.6 (additive payload-schema only).
+
+### Out of scope (still / again)
+
+- **Multi-day Kp / SWPC baseline analysis** — confirm v0.5.2 σ_φ
+  thresholds match real ionospheric activity over a week+ of
+  observations.  Mostly an analysis task (not a code change).
+- **Cross-CPI rolling-window scintillation** — smoother indices,
+  adds peak-bin-tracking state.  Reconsider after underfit_ratio
+  field-data gives us a sense of typical curvature scales.
+- **Per-CPI RFI burst root cause** — currently masked by v0.5.1 MAD;
+  upstream cause unknown (RFI?  ka9q packet duplication?  RX888
+  saturation?).
+
+### Verification status
+
+205 unit tests pass (was 199 in v0.5.2; +6 new).  24 pre-existing
+Kaeppler Zenodo-dataset skips unchanged.  Live verification on
+bee1-rx888: TBD post-deploy — expect ``sigma_phi_underfit_ratio``
+values to cluster around 1.0-1.5 on quiet F2 paths and >> 2 on
+disturbed F2_extreme paths (per the probe data from 2026-05-21
+showing linear → quadratic reductions of 25-60%).

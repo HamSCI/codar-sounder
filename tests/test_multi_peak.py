@@ -229,6 +229,8 @@ class TestChRowBuilder:
             sigma_phi_rad=0.05, sigma_phi_severity="weak",
             scintillation_event=False, confidence=1.0,
             n_samples=60, n_outliers_rejected=0, mode_doppler_hz=0.02,
+            sigma_phi_linear_rad=0.07, sigma_phi_quadratic_rad=0.05,
+            sigma_phi_underfit_ratio=1.4,
         )
         ts = datetime(2026, 5, 7, 12, 30, tzinfo=timezone.utc)
         row = pipeline._ch_row_for(
@@ -254,6 +256,9 @@ class TestChRowBuilder:
             "scintillation_samples", "mode_doppler_hz",
             # v0.5.1: MAD outlier rejection count.
             "scintillation_outliers_rejected",
+            # v0.6: σ_φ diagnostics (linear/quadratic + underfit ratio).
+            "sigma_phi_linear_rad", "sigma_phi_quadratic_rad",
+            "sigma_phi_underfit_ratio",
         }
         assert set(row.keys()) == expected_cols
         assert row["host_call"] == "AC0G"
@@ -275,6 +280,10 @@ class TestChRowBuilder:
         assert row["scintillation_samples"] == 60
         assert row["scintillation_outliers_rejected"] == 0
         assert row["mode_doppler_hz"] == 0.02
+        # v0.6 σ_φ diagnostics.
+        assert row["sigma_phi_linear_rad"] == 0.07
+        assert row["sigma_phi_quadratic_rad"] == 0.05
+        assert row["sigma_phi_underfit_ratio"] == 1.4
 
 
 # ── pipeline writes both JSONL and CH ────────────────────────────────────────
@@ -381,6 +390,15 @@ class TestPipelineEmitsCh:
             # v0.5.1: rejected count is non-negative; clean synthetic
             # signal should produce 0 (no spike to reject).
             assert row["scintillation_outliers_rejected"] >= 0
+            # v0.6: underfit ratio ≥ 1 by construction; both σ_φ
+            # variants finite and non-negative.
+            assert row["sigma_phi_underfit_ratio"] >= 1.0 - 1e-9
+            assert np.isfinite(row["sigma_phi_linear_rad"])
+            assert np.isfinite(row["sigma_phi_quadratic_rad"])
+            # Canonical sigma_phi_rad equals the quadratic value.
+            assert row["sigma_phi_quadratic_rad"] == pytest.approx(
+                row["sigma_phi_rad"], rel=1e-9
+            )
         finally:
             pipeline.close()
 

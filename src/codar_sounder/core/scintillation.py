@@ -184,6 +184,23 @@ class ScintillationResult:
             detrending, expressed as Hz.  This is the propagation mode's
             ionospheric Doppler shift; useful as a stand-alone diagnostic
             (a TID's signature is a slow drift in this number).
+        sigma_phi_linear_rad: σ_φ computed from a *linear* polyfit
+            detrend (v0.6 diagnostic).  Always ≥ ``sigma_phi_rad``
+            (quadratic) because the linear basis is a subspace of the
+            quadratic basis.
+        sigma_phi_quadratic_rad: σ_φ computed from a *quadratic*
+            polyfit detrend.  Numerically identical to
+            ``sigma_phi_rad`` — kept as a named field for symmetry
+            with ``sigma_phi_linear_rad`` so downstream readers don't
+            have to know that the canonical bin uses the quadratic
+            value.
+        sigma_phi_underfit_ratio: ``sigma_phi_linear_rad /
+            sigma_phi_quadratic_rad`` (or 1.0 if quadratic is zero).
+            Equals 1.0 when the slow-time phase has no curvature
+            beyond constant Doppler (clean single-mode propagation);
+            >> 1 when residual phase curvature exists — TIDs,
+            multipath beating, accelerating ionospheric Doppler.
+            Useful as a TID detector independent of σ_φ severity.
     """
     s4_index: float
     s4_severity: str
@@ -194,6 +211,9 @@ class ScintillationResult:
     n_samples: int
     n_outliers_rejected: int
     mode_doppler_hz: float
+    sigma_phi_linear_rad: float
+    sigma_phi_quadratic_rad: float
+    sigma_phi_underfit_ratio: float
 
 
 def _s4_severity(s4_index: float) -> str:
@@ -225,6 +245,9 @@ def _unknown_result(
         n_samples=n_samples,
         n_outliers_rejected=n_outliers_rejected,
         mode_doppler_hz=0.0,
+        sigma_phi_linear_rad=0.0,
+        sigma_phi_quadratic_rad=0.0,
+        sigma_phi_underfit_ratio=1.0,
     )
 
 
@@ -326,32 +349,57 @@ def compute_scintillation(
     sample_indices = np.arange(n_input, dtype=np.float64)[keep]
     times = sample_indices / sample_rate_hz
 
-    # Quadratic detrend (v0.5.2; was linear in v0.5/0.5.1) — captures
-    # TID-scale and beat-multipath phase curvature that the live
-    # bee1-rx888 data showed linear could not track.  Center the time
-    # axis before fitting so the *linear* coefficient is the average-
-    # Doppler slope at the CPI centroid (otherwise the slope would be
-    # evaluated at t=0, biasing mode_doppler_hz for curved phases).
+    # Detrend (v0.5.2): quadratic is canonical for severity bins —
+    # captures TID-scale and beat-multipath phase curvature that the
+    # live bee1-rx888 data showed linear could not track.  Center the
+    # time axis before fitting so the *linear* coefficient is the
+    # average-Doppler slope at the CPI centroid.
+    #
+    # v0.6 adds the linear-detrend σ_φ as a diagnostic field so a
+    # downstream consumer can compute the *underfit ratio* (linear /
+    # quadratic) as a TID/multipath-beating signature, independent of
+    # the σ_φ severity classification.
     try:
         times_centered = times - float(np.mean(times))
-        coeffs = np.polyfit(times_centered, phases, deg=2)
-        # polyfit returns coefficients highest-degree first:
-        # coeffs[0] = quadratic (rad/s²), coeffs[1] = linear (rad/s) =
-        # 2π · f_avg_Doppler, coeffs[2] = constant phase offset.
-        mode_doppler_hz = float(coeffs[1] / (2.0 * np.pi))
-        phase_trend = np.polyval(coeffs, times_centered)
-        phase_detrended = phases - phase_trend
+        # Quadratic — canonical.  polyfit returns coefficients highest-
+        # degree first: [a (rad/s²), b (rad/s), c (rad)] for
+        # phase = a·τ² + b·τ + c with τ = times_centered.
+        coeffs_quad = np.polyfit(times_centered, phases, deg=2)
+        mode_doppler_hz = float(coeffs_quad[1] / (2.0 * np.pi))
+        phase_detrended_quad = phases - np.polyval(coeffs_quad, times_centered)
+        # Linear — diagnostic.
+        coeffs_lin = np.polyfit(times_centered, phases, deg=1)
+        phase_detrended_lin = phases - np.polyval(coeffs_lin, times_centered)
     except (np.linalg.LinAlgError, ValueError):
         # Degenerate input (would need n_samples < 3 — already excluded
-        # by min_samples ≥ 10).  Fall back to mean-subtraction.
+        # by min_samples ≥ 10).  Fall back to mean-subtraction; both
+        # linear and quadratic collapse to the same residual.
         mode_doppler_hz = 0.0
-        phase_detrended = phases - float(np.mean(phases))
+        phase_detrended_quad = phases - float(np.mean(phases))
+        phase_detrended_lin = phase_detrended_quad
 
-    sigma_phi_rad = float(np.std(phase_detrended, ddof=0))
+    sigma_phi_quadratic_rad = float(np.std(phase_detrended_quad, ddof=0))
+    sigma_phi_linear_rad = float(np.std(phase_detrended_lin, ddof=0))
+    # Canonical σ_φ value used for severity classification — matches
+    # the v0.5.2 behaviour (quadratic).
+    sigma_phi_rad = sigma_phi_quadratic_rad
+
+    # Underfit ratio: ≥ 1 by construction (quadratic basis ⊇ linear
+    # basis → quadratic residual ≤ linear residual).  When the
+    # quadratic residual is exactly zero (pathological clean signal),
+    # the ratio is 1.0 by convention rather than ∞.
+    if sigma_phi_quadratic_rad > 0.0:
+        sigma_phi_underfit_ratio = (
+            sigma_phi_linear_rad / sigma_phi_quadratic_rad
+        )
+    else:
+        sigma_phi_underfit_ratio = 1.0
 
     # ─── NaN/Inf guard ───────────────────────────────────────────────
     if not (np.isfinite(s4_index) and np.isfinite(sigma_phi_rad)
-            and np.isfinite(mode_doppler_hz)):
+            and np.isfinite(mode_doppler_hz)
+            and np.isfinite(sigma_phi_linear_rad)
+            and np.isfinite(sigma_phi_underfit_ratio)):
         return _unknown_result(n_input, n_outliers_rejected)
 
     # ─── Confidence ──────────────────────────────────────────────────
@@ -377,4 +425,7 @@ def compute_scintillation(
         n_samples=n_samples,
         n_outliers_rejected=n_outliers_rejected,
         mode_doppler_hz=mode_doppler_hz,
+        sigma_phi_linear_rad=sigma_phi_linear_rad,
+        sigma_phi_quadratic_rad=sigma_phi_quadratic_rad,
+        sigma_phi_underfit_ratio=sigma_phi_underfit_ratio,
     )

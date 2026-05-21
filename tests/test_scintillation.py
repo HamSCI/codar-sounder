@@ -502,8 +502,97 @@ class TestResultDataclass:
             "scintillation_event", "confidence",
             "n_samples", "n_outliers_rejected",
             "mode_doppler_hz",
+            # v0.6 diagnostics:
+            "sigma_phi_linear_rad", "sigma_phi_quadratic_rad",
+            "sigma_phi_underfit_ratio",
         }
         assert set(r.__dataclass_fields__.keys()) == expected
+
+
+class TestUnderfitRatio:
+    """v0.6: sigma_phi_underfit_ratio = sigma_phi_linear / sigma_phi_quad.
+    Equals 1 for clean signals with at most constant Doppler;
+    grows above 1 when phase has curvature the linear detrend
+    can't capture."""
+
+    def test_constant_amplitude_zero_phase_ratio_is_unity(self):
+        """A pure CW signal has zero σ_φ under both estimators →
+        ratio defaults to 1.0 by convention (avoid div-by-zero)."""
+        z = np.ones(N_SAMPLES, dtype=np.complex64)
+        r = compute_scintillation(z, sample_rate_hz=SRF_HZ)
+        assert r.sigma_phi_underfit_ratio == pytest.approx(1.0)
+
+    def test_constant_doppler_ratio_is_unity(self):
+        """Linear phase ramp (constant Doppler, no curvature) →
+        linear detrend is perfect → linear residual == quadratic
+        residual → ratio == 1 (within complex64 precision)."""
+        n = N_SAMPLES
+        f_doppler_hz = 0.05
+        t = np.arange(n) / SRF_HZ
+        phase = 2.0 * np.pi * f_doppler_hz * t
+        z = _complex_from(np.ones_like(t), phase)
+        r = compute_scintillation(z, sample_rate_hz=SRF_HZ)
+        # Both σ_φ values are near-zero floor; the ratio of two near-
+        # zero numbers is noisy, so the test asserts both are tiny
+        # rather than checking the ratio directly.
+        assert r.sigma_phi_linear_rad < 1e-4
+        assert r.sigma_phi_quadratic_rad < 1e-4
+
+    def test_quadratic_phase_inflates_linear_residual(self):
+        """A purely quadratic phase term should give a *huge* linear-
+        detrend residual (linear can't remove curvature) and a
+        near-zero quadratic-detrend residual → underfit ratio >> 1."""
+        n = N_SAMPLES
+        t = np.arange(n, dtype=np.float64)
+        # Pure t² phase: large coefficient so the curvature stands out
+        # above complex64 noise.
+        alpha = 0.005       # rad/sample²
+        # Center around mid-CPI so max phase stays modest (avoid
+        # complex64 precision degradation at large absolute phases).
+        t_centered = t - t.mean()
+        phase = alpha * t_centered ** 2
+        z = _complex_from(np.ones(n), phase)
+        r = compute_scintillation(z, sample_rate_hz=SRF_HZ)
+        # Quadratic should absorb it cleanly; linear leaves big
+        # residual.
+        assert r.sigma_phi_quadratic_rad < 0.05
+        assert r.sigma_phi_linear_rad > 0.5
+        assert r.sigma_phi_underfit_ratio > 5.0
+
+    def test_canonical_field_equals_quadratic(self):
+        """sigma_phi_rad == sigma_phi_quadratic_rad — the canonical
+        field used for severity classification is by construction the
+        quadratic-detrend value."""
+        n = N_SAMPLES
+        phase = _phase_pattern_orthogonal_to_quadratic(0.3)
+        z = _complex_from(np.ones(n), phase)
+        r = compute_scintillation(z, sample_rate_hz=SRF_HZ)
+        assert r.sigma_phi_rad == r.sigma_phi_quadratic_rad
+
+    def test_ratio_at_least_one(self):
+        """By construction the quadratic basis ⊇ linear basis so
+        quadratic residual ≤ linear residual → ratio ≥ 1 for any
+        non-degenerate input."""
+        # A few different inputs.
+        rng = np.random.default_rng(seed=7)
+        for _ in range(10):
+            phase = rng.standard_normal(N_SAMPLES) * 0.5
+            z = _complex_from(np.ones(N_SAMPLES), phase)
+            r = compute_scintillation(z, sample_rate_hz=SRF_HZ)
+            # Allow tiny float epsilon under 1.0 (≤ 1e-9 numerical
+            # noise) but reject anything genuinely below 1.
+            assert r.sigma_phi_underfit_ratio >= 1.0 - 1e-9, (
+                f"ratio={r.sigma_phi_underfit_ratio} "
+                f"lin={r.sigma_phi_linear_rad} "
+                f"quad={r.sigma_phi_quadratic_rad}"
+            )
+
+    def test_unknown_result_ratio_is_unity(self):
+        """The unknown-result fallback returns ratio=1.0."""
+        z = np.ones(DEFAULT_MIN_SAMPLES - 1, dtype=np.complex64)
+        r = compute_scintillation(z, sample_rate_hz=SRF_HZ)
+        assert r.s4_severity == "unknown"
+        assert r.sigma_phi_underfit_ratio == 1.0
 
     def test_frozen(self):
         z = np.ones(N_SAMPLES, dtype=np.complex64)

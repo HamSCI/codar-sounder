@@ -344,6 +344,14 @@ class _TransmitterPipeline:
             "scintillation_outliers_rejected":
                 int(scintillation.n_outliers_rejected),
             "mode_doppler_hz":    float(scintillation.mode_doppler_hz),
+            # v0.6 diagnostics — linear-detrend σ_φ + underfit ratio
+            # for downstream TID/multipath detection.
+            "sigma_phi_linear_rad":
+                float(scintillation.sigma_phi_linear_rad),
+            "sigma_phi_quadratic_rad":
+                float(scintillation.sigma_phi_quadratic_rad),
+            "sigma_phi_underfit_ratio":
+                float(scintillation.sigma_phi_underfit_ratio),
         }
 
     def close(self) -> None:

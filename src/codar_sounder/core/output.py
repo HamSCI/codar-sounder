@@ -34,6 +34,9 @@ Schema (v0.5):
     scintillation_samples            slow-time samples retained after MAD reject (v0.5)
     scintillation_outliers_rejected  count dropped by MAD filter (v0.5.1)
     mode_doppler_hz                  linear-Doppler shift removed before σ_φ
+    sigma_phi_linear_rad             σ_φ from linear detrend (v0.6 diagnostic)
+    sigma_phi_quadratic_rad          σ_φ from quadratic detrend (= sigma_phi_rad)
+    sigma_phi_underfit_ratio         linear/quadratic ratio; >>1 → phase curvature
 
   Scintillation fields are computed per-CPI per-peak from the
   pre-Doppler-FFT range-spectrum column at the peak's range bin — one
@@ -166,6 +169,13 @@ class JsonlWriter:
             "scintillation_outliers_rejected":
                 int(scintillation.n_outliers_rejected),
             "mode_doppler_hz": round(scintillation.mode_doppler_hz, 4),
+            # v0.6 diagnostics — full precision so the linear/quadratic
+            # ratio is reproducible by downstream readers.
+            "sigma_phi_linear_rad": float(scintillation.sigma_phi_linear_rad),
+            "sigma_phi_quadratic_rad":
+                float(scintillation.sigma_phi_quadratic_rad),
+            "sigma_phi_underfit_ratio":
+                round(scintillation.sigma_phi_underfit_ratio, 3),
         }
         fh = self._ensure_open(timestamp)
         fh.write(json.dumps(record, separators=(",", ":")) + "\n")

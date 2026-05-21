@@ -84,6 +84,21 @@ trace → invert → scintillation → JSONL+CH writer per CPI:
     fields are additive payload-schema evolution, not contract-shape
     change.
 
+**v0.6.0 — σ_φ diagnostic fields:**
+
+  * **`sigma_phi_linear_rad` + `sigma_phi_quadratic_rad`** — both
+    polyfit-detrend variants exposed as additive wire fields.  The
+    canonical `sigma_phi_rad` continues to equal the quadratic value
+    (= used for severity classification); the linear variant is the
+    σ_φ a v0.5/0.5.1-style consumer would have seen.
+  * **`sigma_phi_underfit_ratio`** — `linear / quadratic`.  Equals
+    ~1.0 when slow-time phase has no curvature beyond constant
+    Doppler (clean single-mode propagation); >> 1 when residual
+    curvature exists (TIDs, multipath beating, accelerating
+    ionospheric Doppler).  A TID detector independent of σ_φ
+    severity classification.
+  * 3 additive wire fields; contract version unchanged at 0.6.
+
 **v0.4.0 highlights:**
 
   * **Wideband filter wiring** (`core/stream.py`) — uses ka9q-python
