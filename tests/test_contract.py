@@ -77,7 +77,21 @@ class TestInventory:
         assert self.data["client"] == "codar-sounder"
 
     def test_contract_version(self):
-        assert self.data["contract_version"] == "0.6"
+        assert self.data["contract_version"] == "0.7"
+
+    def test_timing_authority_applied_explicit_null(self):
+        """CONTRACT v0.7 §3/§18 — runtime-state field for the §18
+        subscription. codar-sounder runs in RTP-default mode today
+        (no §18 subscriber wired yet, though it is the most likely
+        future hard-deadline candidate per
+        project_client_contract_v07). Field must be present and
+        explicitly None — distinguishes contract-aware-in-default-mode
+        from a pre-v0.7 client."""
+        for inst in self.data["instances"]:
+            assert "timing_authority_applied" in inst, (
+                f"instance {inst.get('instance')} missing timing_authority_applied"
+            )
+            assert inst["timing_authority_applied"] is None
 
     def test_has_config_path(self):
         assert "config_path" in self.data

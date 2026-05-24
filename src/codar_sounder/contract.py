@@ -27,7 +27,7 @@ from codar_sounder.config import (
 from codar_sounder.version import GIT_INFO
 
 
-CONTRACT_VERSION = "0.6"
+CONTRACT_VERSION = "0.7"
 
 
 def _client_version() -> str:
@@ -86,6 +86,18 @@ def build_inventory(config: dict, config_path: Path) -> dict:
                 "data_sinks": data_sinks,
                 "uses_timing_calibration": False,
                 "provides_timing_calibration": False,
+                # CONTRACT v0.7 §18 — runtime-state field for the §18
+                # subscription. codar-sounder runs in RTP-default mode
+                # today; the field is null. NOTE: codar-sounder is the
+                # most likely *hard-deadline* candidate among the
+                # current clients (TX schedule alignment per
+                # project_client_contract_v07) — when a future
+                # codar-sounder iteration subscribes to a §18
+                # authority for tighter TX-cycle gating, this field
+                # will report the live (source, tier, sigma_ns,
+                # snapshot_age_s, radiod_id) the subscriber last
+                # fetched.
+                "timing_authority_applied": None,
             }
             instances.append(instance)
 
