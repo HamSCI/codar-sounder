@@ -73,9 +73,15 @@ def build_inventory(config: dict, config_path: Path) -> dict:
                 },
             ]
 
+            # RADIOD-IDENTIFICATION.md §3.2 — inventory radiod_id is
+            # the mDNS control/status multicast name (the only
+            # functional identifier).  Fall back to the local label
+            # when no status_dns is declared so legacy configs still
+            # produce parseable inventory.
+            inventory_radiod_id = status_dns or radiod_id
             instance: dict[str, Any] = {
                 "instance": tx_id,
-                "radiod_id": radiod_id,
+                "radiod_id": inventory_radiod_id,
                 "host": "localhost",
                 "radiod_status_dns": status_dns,
                 "data_destination": None,
