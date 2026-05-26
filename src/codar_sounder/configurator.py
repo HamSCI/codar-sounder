@@ -41,14 +41,47 @@ def cmd_config_init(args) -> int:
     print("  [[radiod.transmitter]] for each CODAR station you want to monitor")
     print("Then enable a service instance:  sudo systemctl enable codar-sounder@<reporter-id>")
 
+    # RADIOD-IDENTIFICATION.md §4 — surface discoverable radiods so
+    # the operator can paste a name straight into [[radiod]] status
+    # without having to remember/look up the multicast hostname.
+    discovered = _discover_radiods()
+    if discovered:
+        print("")
+        print("Radiods broadcasting on the LAN (paste one into "
+              "[[radiod]] status):")
+        for svc in discovered:
+            print(f"  status       = \"{svc['hostname']}\"   "
+                  f"# advertised: {svc['name']!r}")
+    else:
+        print("")
+        print("\033[33m⚠\033[0m  No radiod instances broadcasting on the "
+              "local network.  Install + start radiod before the daemon")
+        print("   can connect:  sudo smd install ka9q-radio")
+
     # Surface contract §14.3 env-bag values when present (operator-friendly).
     call = os.environ.get("STATION_CALL")
     grid = os.environ.get("STATION_GRID")
     if call or grid:
+        print("")
         print("Sigmond env-bag values you can paste into [station]:")
         if call: print(f"  callsign = \"{call}\"")
         if grid: print(f"  grid_square = \"{grid}\"")
     return 0
+
+
+def _discover_radiods(timeout: float = 5.0) -> list[dict]:
+    """Return discovered radiods or [] on failure.
+
+    Per RADIOD-IDENTIFICATION.md §4 — used to surface the LAN's
+    available radiods to the operator during `config init`.  Each
+    entry is {"name", "hostname", "address", "port"}; `hostname` is
+    the mDNS multicast name (the canonical identifier).
+    """
+    try:
+        from ka9q.discovery import discover_radiod_services
+        return discover_radiod_services(timeout=timeout) or []
+    except Exception:
+        return []
 
 
 def cmd_config_edit(args) -> int:
