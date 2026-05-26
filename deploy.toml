@@ -35,17 +35,17 @@ edit = ["/usr/local/bin/codar-sounder", "config", "edit"]
 
 [build]
 steps = [
-    "python3 -m venv /opt/codar-sounder/venv",
-    "/opt/codar-sounder/venv/bin/pip install --upgrade pip setuptools wheel",
-    "/opt/codar-sounder/venv/bin/pip install -e /opt/git/sigmond/codar-sounder",
+    "python3 -m venv /opt/git/sigmond/codar-sounder/venv",
+    "/opt/git/sigmond/codar-sounder/venv/bin/pip install --upgrade pip setuptools wheel",
+    "/opt/git/sigmond/codar-sounder/venv/bin/pip install -e /opt/git/sigmond/codar-sounder",
 ]
 produces = [
-    "/opt/codar-sounder/venv/bin/codar-sounder",
+    "/opt/git/sigmond/codar-sounder/venv/bin/codar-sounder",
 ]
 
 [[install.steps]]
 kind = "link"
-src  = "/opt/codar-sounder/venv/bin/codar-sounder"
+src  = "/opt/git/sigmond/codar-sounder/venv/bin/codar-sounder"
 dst  = "/usr/local/bin/codar-sounder"
 
 [[install.steps]]
@@ -96,9 +96,9 @@ name    = "ka9q-python"
 # required so RadiodIQSource captures the full CODAR chirp bandwidth
 # (the iq preset's default ±5 kHz audio filter truncates the chirp).
 version = ">=3.11.0"
-venv    = "/opt/codar-sounder/venv"
+venv    = "/opt/git/sigmond/codar-sounder/venv"
 
 [[deps.pypi]]
 name    = "numpy"
 version = ">=1.24.0"
-venv    = "/opt/codar-sounder/venv"
+venv    = "/opt/git/sigmond/codar-sounder/venv"

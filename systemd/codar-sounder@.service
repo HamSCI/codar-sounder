@@ -16,7 +16,7 @@ NotifyAccess=main
 EnvironmentFile=-/etc/sigmond/coordination.env
 EnvironmentFile=-/etc/codar-sounder/env/%i.env
 
-WorkingDirectory=/opt/codar-sounder
+WorkingDirectory=/opt/git/sigmond/codar-sounder
 
 ExecStartPre=+/bin/mkdir -p /var/lib/codar-sounder/%i
 ExecStartPre=+/bin/mkdir -p /var/log/codar-sounder
@@ -31,7 +31,7 @@ ExecStartPre=+/usr/bin/chown -R codarsnd:codarsnd /var/log/codar-sounder
 # deprecation warning.  --radiod-id %i stays for the legacy fallback
 # path; --config is intentionally omitted (explicit_path wins in
 # resolve_config_path, which would force the legacy path forever).
-ExecStart=/opt/codar-sounder/venv/bin/python3 -m codar_sounder.cli daemon \
+ExecStart=/opt/git/sigmond/codar-sounder/venv/bin/python3 -m codar_sounder.cli daemon \
     --instance %i \
     --radiod-id %i
 

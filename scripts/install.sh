@@ -6,7 +6,7 @@
 # What it does:
 #   1. Creates service user codarsnd:codarsnd
 #   2. Clones/links repo to /opt/git/sigmond/codar-sounder
-#   3. Creates venv at /opt/codar-sounder/venv with editable install
+#   3. Creates venv at /opt/git/sigmond/codar-sounder/venv with editable install
 #   4. Renders config template (non-destructive — never overwrites)
 #   5. Installs systemd unit template
 #
@@ -17,7 +17,7 @@ set -euo pipefail
 SERVICE_USER="codarsnd"
 SERVICE_GROUP="codarsnd"
 REPO_SOURCE="/opt/git/sigmond/codar-sounder"
-VENV_DIR="/opt/codar-sounder/venv"
+VENV_DIR="/opt/git/sigmond/codar-sounder/venv"
 CONFIG_DIR="/etc/codar-sounder"
 CONFIG_FILE="${CONFIG_DIR}/codar-sounder-config.toml"
 SPOOL_DIR="/var/lib/codar-sounder"
