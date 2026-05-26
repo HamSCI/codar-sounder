@@ -5,23 +5,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this project is
 
 **codar-sounder** is an opportunistic ionospheric sounder for the
-HamSCI sigmond suite. It receives CODAR (Coastal Ocean Dynamics
-Applications Radar) HF FMCW chirp transmissions via `radiod`, dechirps
-them, and produces a JSON-Lines time series of group range, virtual
+HamSCI (Ham Radio Science Citizen Investigation) sigmond suite. It
+receives CODAR (Coastal Ocean Dynamics Applications Radar)
+high-frequency (HF) linear frequency-modulated continuous-wave
+(FMCW) chirp transmissions via `radiod`, dechirps them, and
+produces a JSON Lines (JSONL) time series of group range, virtual
 height, and equivalent vertical frequency along each oblique
 propagation path.
 
 The science follows Kaeppler et al. (2022, *Atmos. Meas. Tech.* 15:
 4531–4545). CODAR transmitters along the US east and west coasts
 radiate linear-FMCW chirps at well-characterised frequencies
-(4–50 MHz) 24/7 with GPS-disciplined timing — already-paid-for signals
-that are an excellent opportunistic source for single-frequency
-oblique sounding.
+(4–50 MHz) 24/7 with timing disciplined by the Global Positioning
+System (GPS) — already-paid-for signals that are an excellent
+opportunistic source for single-frequency oblique sounding.
 
 Part of the HamSCI sigmond suite — see `/opt/git/sigmond/sigmond/CLAUDE.md`
 (orchestrator) and `/opt/git/sigmond/CLAUDE.md` (umbrella) for
-cross-repo context. README has the deep scientific narrative;
-this file is the operational map.
+cross-repo context. README carries background and operator-facing
+overview; `docs/METHODOLOGY.md` carries the signal-processing /
+inversion / scintillation detail; this file is the operational map.
 
 ## Authors
 
@@ -42,12 +45,12 @@ uv run pytest -k scintillation -v                # by keyword
 sudo ./scripts/install.sh           # first-run
 sudo ./scripts/deploy.sh            # ongoing refresh
 
-# CLI (current — verify against `codar-sounder --help`)
+# Command-line interface (CLI) — verify against `codar-sounder --help`
 codar-sounder inventory --json      # per-instance resource view
 codar-sounder validate --json       # config validation
 codar-sounder version --json
 codar-sounder daemon --config <path> --radiod-id <id>
-codar-sounder tdma-scan             # probe TDMA slot assignments for co-band tx's
+codar-sounder tdma-scan             # probe time-division multiple access (TDMA) slot assignments for co-band tx's
 codar-sounder config init|edit      # whiptail wizard via sigmond.wizard_dispatch
 ```
 
@@ -55,22 +58,24 @@ codar-sounder config init|edit      # whiptail wizard via sigmond.wizard_dispatc
 
 ```
 radiod (ka9q-radio, IQ preset)
-  │   wideband IQ for the CODAR chirp band — ka9q-python's
-  │   ensure_channel(low_edge=..., high_edge=...) bypasses the
-  │   iq preset's ±5 kHz audio filter that would clip the chirp.
+  │   wideband in-phase / quadrature (I/Q) for the CODAR chirp band —
+  │   ka9q-python's ensure_channel(low_edge=..., high_edge=...) bypasses
+  │   the iq preset's ±5 kHz audio filter that would clip the chirp.
   ▼
 RadiodIQSource (core/stream.py)
-  │   CF32 IQ samples → CPI (coherent processing interval) framing
+  │   complex 32-bit float (CF32) I/Q samples → CPI (coherent
+  │   processing interval) framing
   ▼
 Dechirp (core/dechirp.py)                       — Kaeppler §2.1
-  │   windowed quadratic-phase replica, range-Doppler FFT,
-  │   beat-frequency → group-range conversion
+  │   windowed quadratic-phase replica, range-Doppler fast Fourier
+  │   transform (FFT), beat-frequency → group-range conversion
   │   TDMA phase-offset wrapping for co-band transmitters
   ▼
 Trace (core/trace.py)
   │   rolling-median ground-clutter mask
-  │   find_f_region_peaks() — multi-peak detection (SNR threshold,
-  │   min separation, ≤4 peaks per CPI: 1F2 high+low ray, E, Es)
+  │   find_f_region_peaks() — multi-peak detection (signal-to-noise
+  │   ratio (SNR) threshold, min separation, ≤4 peaks per CPI:
+  │   1F2 high+low ray, E, sporadic-E (Es))
   ▼
 Invert (core/invert.py)
   │   secant-law virtual height + equiv vertical freq
@@ -79,13 +84,17 @@ Invert (core/invert.py)
   ▼
 Scintillation (core/scintillation.py, v0.5+)
   │   per peak per CPI: pre-Doppler-FFT range-bin slow-time
-  │   → ITU-R P.531 S4 (amplitude) + σ_φ (phase) indices
+  │   → International Telecommunication Union Radiocommunication
+  │   Sector (ITU-R) Recommendation P.531 S4 (amplitude) + σ_φ
+  │   (phase) indices
   │   severity bins (weak / moderate / strong / unknown)
   │   propagation-mode-resolved (mode-by-mode vs hf-timestd's
-  │   vertical-incidence WWV approach)
+  │   vertical-incidence approach using the WWV time-and-frequency
+  │   broadcast from the US National Institute of Standards and
+  │   Technology (NIST))
   ▼
 Output (core/output.py)
-  │   Canonical L1 artefact (Kaeppler-compatible Zenodo schema):
+  │   Canonical Level-1 (L1) artefact (Kaeppler-compatible Zenodo schema):
   │   /var/lib/codar-sounder/<radiod>/<station>/YYYY/MM/DD.jsonl
   │   One record per detected peak (peak_index / peak_count / mode_layer).
   ▼
@@ -147,8 +156,9 @@ tasks/                    # planning notes
   virtual height; closes the F2_extreme misclassification mode of
   earlier versions.
 - **Kp-calibrated scintillation thresholds.** S4 and σ_φ severity
-  bins (weak / moderate / strong) were calibrated against Kp index
-  in v0.6.2/0.6.3 — see `scripts/kp_correlation_analysis.py` and
+  bins (weak / moderate / strong) were calibrated against the
+  planetary geomagnetic activity index (Kp) in v0.6.2/0.6.3 —
+  see `scripts/kp_correlation_analysis.py` and
   `scripts/multihop_diagnostic.py` for the analysis. Kp ≥ 5 storm-day
   calibration is the open follow-up noted in README.
 - **TDMA aware.** Co-located CODAR transmitters share frequencies via
@@ -183,8 +193,9 @@ Sections implemented:
   canonical JSONL.
 - **§18 (timing authority)** — `authority_reader.py` exists as a
   snapshot subscriber stub. `timing_authority_applied` may be
-  `null` (RTP-default) depending on whether subscription has been
-  wired into the CPI loop on this host. Verify against inventory.
+  `null` (Real-time Transport Protocol- (RTP-) default) depending
+  on whether subscription has been wired into the CPI loop on
+  this host. Verify against inventory.
 
 ## Production paths
 
@@ -206,8 +217,8 @@ on but which inform threshold calibration and multi-hop debugging:
 - `multihop_diagnostic.py` — visualise per-CPI peak structure to
   validate multi-hop classification (used in v0.7).
 
-See README's "Calibration & monitoring tools" section for usage and
-the open Kp ≥ 5 storm-day follow-up.
+See `docs/METHODOLOGY.md` §11 for usage and the open Kp ≥ 5
+storm-day follow-up.
 
 ## Reference
 
@@ -216,8 +227,9 @@ the open Kp ≥ 5 storm-day follow-up.
   *Atmos. Meas. Tech.* 15, 4531–4545. doi:10.5194/amt-15-4531-2022.
   This paper drives §2.1 (dechirp), Eq. 13/14 (uncertainty
   propagation), and the data product schema.
-- README — installation, status, scientific context, calibration
-  follow-up plan.
+- `README.md` — background, overview, install.
+- `docs/METHODOLOGY.md` — signal-processing methodology, formulas,
+  thresholds, release-by-release evolution.
 
 ## Per-instance cutover (Phase 5 of sigmond multi-instance architecture)
 
