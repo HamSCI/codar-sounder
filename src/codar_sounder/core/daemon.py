@@ -433,7 +433,10 @@ class SounderDaemon:
         # _TransmitterPipeline._build_record() falls back to radiod_id.
         self.reporter_id = reporter_id
         self.channel_name = radiod_block.get("channel_name", "codar")
-        self.status_dns = radiod_block.get("status_dns", "")
+        # RADIOD-IDENTIFICATION.md §3.1 — prefer new `status` field;
+        # fall back to legacy `status_dns` during the deprecation window.
+        self.status_dns = (radiod_block.get("status")
+                           or radiod_block.get("status_dns", ""))
 
         # Sample rate is implicitly set by the radiod fragment
         # (etc/radiod-fragment.conf samprate field); v0.2 reads it from

@@ -320,7 +320,9 @@ def _handle_tdma_scan(args):
     )
     first_tx = txs[0]
     iq_source = make_iq_source(
-        radiod_status_dns=str(block.get("status_dns", "")),
+        # RADIOD-IDENTIFICATION.md §3.1 — prefer new `status` field;
+        # fall back to legacy `status_dns` during the deprecation window.
+        radiod_status_dns=str(block.get("status") or block.get("status_dns", "")),
         channel_name=str(block.get("channel_name", "codar")),
         sample_rate_hz=sample_rate_hz,
         cpi_seconds=float(args.seconds),
