@@ -63,6 +63,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, IO, Optional
 
+from codar_sounder.core.authority_reader import (
+    AuthorityReader,
+    standalone_timing_authority,
+)
 from codar_sounder.core.invert import IonosphericFix
 from codar_sounder.core.scintillation import ScintillationResult
 from codar_sounder.core.trace import TraceDetection
@@ -73,12 +77,23 @@ log = logging.getLogger(__name__)
 class JsonlWriter:
     """Daily-rotated JSON-Lines writer keyed on (radiod_id, station)."""
 
-    def __init__(self, output_root: Path, radiod_id: str, station_id: str):
+    def __init__(
+        self,
+        output_root: Path,
+        radiod_id: str,
+        station_id: str,
+        authority_reader: Optional[AuthorityReader] = None,
+    ):
         self.output_root = Path(output_root)
         self.radiod_id = radiod_id
         self.station_id = station_id
         self._current_date: Optional[str] = None
         self._fh: Optional[IO[str]] = None
+        # Read per record so the canonical timing_authority block reflects
+        # the authority state at write time (tier/offset/sigma can change
+        # cycle to cycle). authority.json is a small tmpfs file; the read
+        # is cheap and every error path degrades to standalone-fallback.
+        self._authority_reader = authority_reader or AuthorityReader()
 
     def _path_for(self, ts: datetime) -> Path:
         d = ts.astimezone(timezone.utc)
@@ -134,8 +149,20 @@ class JsonlWriter:
         reproducing the severity from the numeric value can do so
         deterministically across the bin boundaries.
         """
+        snap = None
+        try:
+            snap = self._authority_reader.read()
+        except Exception as exc:  # noqa: BLE001
+            log.debug("authority.json read failed: %s", exc)
+        timing_authority = (
+            snap.to_timing_authority(self.radiod_id)
+            if snap is not None
+            else standalone_timing_authority(self.radiod_id)
+        )
+
         record: dict[str, Any] = {
             "timestamp": timestamp.astimezone(timezone.utc).isoformat(),
+            "timing_authority": timing_authority,
             "client": "codar-sounder",
             "radiod_id": self.radiod_id,
             "radiod_status_dns": radiod_status_dns,
