@@ -80,6 +80,17 @@ if [[ ! -f /opt/git/sigmond/ka9q-python/pyproject.toml ]]; then
         || { ui_error "Failed to clone ka9q-python"; exit 1; }
 fi
 
+# hamsci-dsp is the suite-shared DSP/geometry sibling (also path-based
+# editable in [tool.uv.sources]); uv sync needs it on disk too.  It's
+# local-only (not on PyPI), so a host without it must clone here or the
+# sync fails to resolve ../hamsci-dsp.
+if [[ ! -f /opt/git/sigmond/hamsci-dsp/pyproject.toml ]]; then
+    ui_info "hamsci-dsp sibling repo not at /opt/git/sigmond/hamsci-dsp -- cloning"
+    mkdir -p /opt/git/sigmond
+    git clone https://github.com/HamSCI/hamsci-dsp /opt/git/sigmond/hamsci-dsp \
+        || { ui_error "Failed to clone hamsci-dsp"; exit 1; }
+fi
+
 # --- Phase 1: service user ---
 if ! id -u "$SERVICE_USER" &>/dev/null; then
     ui_info "Creating service user $SERVICE_USER"
