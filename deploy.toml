@@ -92,10 +92,10 @@ template = "etc/radiod-fragment.conf"
 [deps]
 [[deps.pypi]]
 name    = "ka9q-python"
-# ≥3.11 added low_edge/high_edge filter kwargs to ensure_channel —
-# required so RadiodIQSource captures the full CODAR chirp bandwidth
-# (the iq preset's default ±5 kHz audio filter truncates the chirp).
-version = ">=3.11.0"
+# ≥3.14 to match pyproject: 3.11 added the low_edge/high_edge filter kwargs to
+# ensure_channel (so RadiodIQSource captures the full CODAR chirp bandwidth, not
+# the iq preset's ±5 kHz audio filter), and 3.14 added RadiodControl(client_id=).
+version = ">=3.14.0"
 venv    = "/opt/git/sigmond/codar-sounder/venv"
 
 [[deps.pypi]]
