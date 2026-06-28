@@ -25,7 +25,7 @@ dependencies = [
     # great-circle / bearing helpers (WGS-84 via geographiclib) so every
     # client computes TX-RX geometry identically.  Local-only sibling
     # (not yet on PyPI); resolved editable via [tool.uv.sources] below.
-    "hamsci-dsp>=0.2.0",
+    "hamsci-dsp>=0.3.0",
 ]
 
 [project.optional-dependencies]

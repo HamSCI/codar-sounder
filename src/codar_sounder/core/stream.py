@@ -195,7 +195,7 @@ class RadiodIQSource:
 
         # Imported lazily so the test suite + synthetic mode don't need
         # the authority machinery present to import this module.
-        from codar_sounder.core.authority_reader import AuthorityReader as _AR
+        from hamsci_dsp.timing import AuthorityReader as _AR
         self._authority_reader = (
             authority_reader if authority_reader is not None else _AR()
         )
@@ -307,58 +307,40 @@ class RadiodIQSource:
     def _compute_anchor_utc(self) -> datetime:
         """Derive the UTC timestamp of the very first sample delivered.
 
-        Uses ka9q.rtp_to_wallclock() against the captured first_rtp_timestamp
-        + channel_info (gps_time / rtp_timesnap), then adds the
-        rtp_to_utc_offset_ns published by hf-timestd if available.  This
-        is the §4.5 RTP-reference invariant in concrete form: time is
-        hf-timestd's product, the client just consumes it.
+        Delegates to the suite-shared hamsci_dsp.timing.acquire_anchor_utc
+        helper: it pins the captured first_rtp_timestamp + channel_info
+        (gps_time / rtp_timesnap) to UTC via ka9q.rtp_to_utc, then adds the
+        rtp_to_utc_offset_ns published by hf-timestd if available.  This is
+        the §4.5 RTP-reference invariant in concrete form: time is
+        hf-timestd's product, the client just consumes it.  codar anchors
+        the FIRST delivered sample (samples_behind=0) — it does not align to
+        a UTC cadence grid; CPI frames free-run off this single anchor.
 
         If the first RTP timestamp wasn't captured (no packet ever
         arrived — extremely unlikely by the time we're computing this)
-        OR rtp_to_wallclock returns None, fall back to wall-clock-now
-        with an explicit warning.
+        OR rtp_to_utc returns None, the helper falls back to wall-clock.
         """
-        from ka9q.rtp_recorder import rtp_to_wallclock  # type: ignore
-        snap = None
-        try:
-            snap = self._authority_reader.read()
-        except Exception as exc:                # noqa: BLE001
-            log.warning("authority read failed: %s", exc)
-        offset_sec = snap.offset_seconds if (snap and snap.offset_usable) else 0.0
-        # Use time.time() as a wrap-epoch hint for rtp_to_wallclock —
-        # this is wrap-disambiguation only (±period/2 tolerance, hours),
-        # not a labeling reference.  Per §4.5 it's the documented
-        # explicit-hint use of system clock; the actual UTC label is
-        # the RTP-derived value plus the authority offset.
-        utc_sec: Optional[float] = None
-        if self._anchor_first_rtp is not None and self._channel_info is not None:
-            utc_sec = rtp_to_wallclock(
-                self._anchor_first_rtp,
-                self._channel_info,
-                wallclock_hint_sec=time.time() + offset_sec,
-            )
-        if utc_sec is None:
-            log.warning(
-                "RadiodIQSource: CPI anchor falling back to wall-clock — "
-                "RTP timing info unavailable (anchor_first_rtp=%r, "
-                "channel_info=%r).  Labels will be tied to host clock; "
-                "if hf-timestd is available it should still take over via "
-                "authority.json offset.",
-                self._anchor_first_rtp, self._channel_info,
-            )
-            return datetime.now(timezone.utc)
-        anchor = datetime.fromtimestamp(utc_sec, tz=timezone.utc) + timedelta(
-            seconds=offset_sec,
+        from hamsci_dsp.timing import acquire_anchor_utc
+        from ka9q import rtp_to_utc  # type: ignore
+
+        a = acquire_anchor_utc(
+            first_rtp=self._anchor_first_rtp,
+            channel_info=self._channel_info,
+            rtp_to_utc=rtp_to_utc,
+            authority_reader=self._authority_reader,
+            samples_behind=0,                 # codar anchors the first delivered sample
+            sample_rate=int(self.sample_rate_hz),
         )
         log.info(
-            "RadiodIQSource: CPI anchor %s (rtp=%d, authority=%s, "
+            "RadiodIQSource: CPI anchor %s (rtp=%s, source=%s, authority=%s, "
             "offset=%+.6fs)",
-            anchor.isoformat(),
+            a.datetime.isoformat(),
             self._anchor_first_rtp,
-            (snap.t_level_active if snap else "unavailable"),
-            offset_sec,
+            a.source,
+            (a.snapshot.t_level_active if a.snapshot else "unavailable"),
+            a.offset_seconds,
         )
-        return anchor
+        return a.datetime
 
     def __iter__(self) -> Iterator[Tuple[np.ndarray, datetime]]:
         log.info(

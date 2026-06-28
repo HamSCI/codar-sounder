@@ -128,7 +128,9 @@ src/codar_sounder/
     scintillation.py      # S4 + σ_φ per peak per CPI
     output.py             # daily-rotated JSONL + HamSCI sink writer
     tdma.py               # TDMA slot detection / phase wrapping
-    authority_reader.py   # §18 timing-authority snapshot subscriber
+                          # §18 timing-authority snapshot subscriber +
+                          #   RTP->UTC anchor now live in hamsci_dsp.timing
+                          #   (AuthorityReader / acquire_anchor_utc); de-duped
 data/codar-stations.toml  # CANONICAL CODAR transmitter site database (freq_mhz,
                           #   sweep params, lat/lon) — the picker generates
                           #   [[radiod.transmitter]] blocks from this; never hand-transcribe
@@ -222,11 +224,15 @@ Sections implemented:
   `sigmond.wizard_dispatch`.
 - **§17** — additive HamSCI sink writer (`codar.spots`) alongside
   canonical JSONL.
-- **§18 (timing authority)** — `authority_reader.py` subscribes to
+- **§18 (timing authority)** — the suite-shared
+  `hamsci_dsp.timing.AuthorityReader` subscribes to
   `/run/hf-timestd/authority.json` and **is** wired into the CPI loop:
-  `stream.py:_compute_anchor_utc` anchors each CPI's UTC from
-  `rtp_to_wallclock` + the published offset (METROLOGY §4.5), and
-  `output.py` records the provenance block per CPI.  The inventory
+  `stream.py:_compute_anchor_utc` anchors each CPI's UTC via the shared
+  `hamsci_dsp.timing.acquire_anchor_utc` helper (ka9q `rtp_to_utc` +
+  the published offset, METROLOGY §4.5), and
+  `output.py` records the provenance block per CPI.  codar free-runs CPI
+  frames off this single anchor — it does **not** use `ka9q.SlotClock`
+  (that's only for epoch-aligned slot recorders).  The inventory
   `timing_authority_applied` field stays `null` **by design** — `null`
   reports RTP-default mode (RTP-derived label + opportunistic offset),
   the same convention `wspr`/`psk` use; it becomes a populated

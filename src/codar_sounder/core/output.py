@@ -63,7 +63,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, IO, Optional
 
-from codar_sounder.core.authority_reader import (
+from hamsci_dsp.timing import (
     AuthorityReader,
     standalone_timing_authority,
 )
