@@ -281,16 +281,20 @@ table) · Kaeppler et al. (2022) as the methodological reference.
   `requires=[ka9q-python, ka9q-radio]`, `start_priority=200`, a §15
   `[[radiod.fragment]]`, and `[client_features.watch]`/`receiver_channels` UI
   hooks. `inventory` declares `data_sinks=[file]` per instance,
-  `provides_timing_calibration=false`, `uses_timing_calibration=false`. Full
+  `provides_timing_calibration=false`, `uses_timing_calibration=true`. Full
   field semantics: contract §3/§15/§17.
-- `CDR-I-002` `[DOC]` 🟡 **Timing-authority consumer (label-only):**
-  `authority_reader.py` reads hf-timestd's §18 authority and `stream.py`/`output.py`
-  stamp it into every CPI record, falling back to RTP-default
-  (`standalone_timing_authority`) when absent. `timing_authority_applied` is
-  `null` **by design** — codar-sounder uses the authority to *label*, not yet to
-  *gate* behaviour (it is the most likely future hard-deadline / TX-cycle-gating
-  client; populating the field is a future iteration). Subscriber obligations are
-  the contract's, not restated here.
+- `CDR-I-002` `[CODE]` ✅ **Timing-authority subscriber (§18, labels):**
+  `stream.py:_compute_anchor_utc` anchors the first delivered sample through
+  `hamsci_dsp.timing.acquire_anchor_utc`, which applies hf-timestd's published
+  RTP→UTC offset whenever `authority.json` reads fresh; `output.py` stamps the
+  provenance into every CPI record (`standalone_timing_authority` when absent).
+  `inventory` reports `uses_timing_calibration=true` and reads
+  `timing_authority_applied` from the block the running daemon writes at most
+  once a minute to `<output_dir>/<radiod_id>/timing-authority.json`
+  (`core/applied_state.py`), per the §18.5 amendment of 2026-09-04: the field
+  describes the labels.  A stale or absent file reads as `null`.  Gating
+  behaviour on the authority remains open under `CDR-F-092`.  Subscriber
+  obligations stay the contract's, not restated here.
 - `CDR-I-003` `[DOC]` ✅ Channel provisioning is the sigmond §15 seam: codar
   contributes `[[radiod.fragment]]`; sigmond renders it into radiod. Per-(client,
   radiod) multicast routing uses ka9q-python `client_id=` (≥3.14, contract §7).
@@ -347,10 +351,12 @@ Kp ≥ 5 storm-day calibration; §18 authority *gating* (TX-cycle alignment).
   `inventory` deps array hard-codes `ka9q-python>=3.11.0` while `pyproject`/`deploy`
   require `>=3.14.0` (for `client_id=`). The advertised floor SHALL match the
   real requirement.
-- `CDR-F-092` `[NEW]` ⬜ **§18 authority read-but-not-gated:** authority is stamped
-  for provenance, not applied to gate TX-cycle alignment; `timing_authority_applied`
-  stays `null`. A future Doppler/TX-gating iteration must close this and populate
-  the field (ties to hf-timestd `HFT-I-002`).
+- `CDR-F-092` `[NEW]` 🟡 **§18 authority labels, not yet gates:** the label
+  half closed. `acquire_anchor_utc` applies the authority offset to the CPI
+  anchor and `inventory` reports `timing_authority_applied` from the daemon's
+  applied-state file (`CDR-I-002`). The gating half stays open: no code uses the
+  authority to align TX-cycle scheduling. A future Doppler/TX-gating iteration
+  must close that (ties to hf-timestd `HFT-I-002`).
 - `CDR-F-093` `[NEW]` ⬜ **Single-band synthetic fallback fidelity:** the synthetic
   IQ source models only the first transmitter's sweep; multi-TX synthetic CPIs are
   not represented. Acceptable for smoke-tests; flagged so it isn't mistaken for

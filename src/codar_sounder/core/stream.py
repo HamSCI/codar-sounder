@@ -35,9 +35,12 @@ import logging
 import threading
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Iterator, Optional, Tuple
+from typing import TYPE_CHECKING, Iterator, Optional, Tuple
 
 import numpy as np
+
+if TYPE_CHECKING:  # pragma: no cover
+    from hamsci_dsp.timing import AnchorUTC, AuthorityReader
 
 log = logging.getLogger(__name__)
 
@@ -134,6 +137,12 @@ class SyntheticIQSource:
             ).astype(np.complex64)
         self._t_offset_s += n / self.sample_rate_hz
         return rx
+
+    @property
+    def anchor(self) -> None:
+        """The synthetic source labels CPIs from the host wall clock and
+        never pins an AnchorUTC, so the §3 report for it reads null."""
+        return None
 
     def __iter__(self) -> Iterator[Tuple[np.ndarray, datetime]]:
         while not self._stopped.is_set():
@@ -243,11 +252,24 @@ class RadiodIQSource:
         # quality block; consumed in __iter__ to compute each CPI's
         # start UTC by pure sample-count projection.
         self._anchor_first_rtp: Optional[int] = None
+        # The AnchorUTC the CPI labels project from.  The daemon reads it
+        # for the §3 timing_authority_applied report (CLIENT-CONTRACT
+        # §18.5: the report describes the labels, so it comes from the
+        # anchor that produced them, never from a fresh authority read).
+        # None until the first CPI; reset when __iter__ re-provisions.
+        self._anchor: Optional["AnchorUTC"] = None
         self._import_ka9q()                  # raises ModuleNotFoundError if missing
 
     @property
     def cpi_n_samples(self) -> int:
         return int(round(self.sample_rate_hz * self.cpi_seconds))
+
+    @property
+    def anchor(self) -> Optional["AnchorUTC"]:
+        """The anchor every CPI label projects from (None until the first
+        CPI).  Its ``timing_authority_applied()`` is this source's honest
+        §3 report."""
+        return self._anchor
 
     def _import_ka9q(self) -> None:
         global _ka9q_RadiodStream, _ka9q_RadiodControl
@@ -340,6 +362,7 @@ class RadiodIQSource:
             (a.snapshot.t_level_active if a.snapshot else "unavailable"),
             a.offset_seconds,
         )
+        self._anchor = a
         return a.datetime
 
     def __iter__(self) -> Iterator[Tuple[np.ndarray, datetime]]:
@@ -361,6 +384,9 @@ class RadiodIQSource:
             self.radiod_status_dns,
             client_id="codar-sounder",
         )
+        # A fresh channel means a fresh stream; any earlier anchor named
+        # labels that stream no longer produces.
+        self._anchor = None
         # Force F32LE (encoding=4) IQ.  ka9q-python's default (S16BE)
         # appears to deliver byte-swap-corrupted samples from this
         # ka9q-python / radiod combination — magnitudes come out as

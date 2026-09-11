@@ -78,3 +78,92 @@ class TestFilterDefaulting:
         )
         assert src._filter_low_edge_hz == pytest.approx(-12000.0)
         assert src._filter_high_edge_hz == pytest.approx(+12000.0)
+
+
+# ---------------------------------------------------------------------------
+# The source keeps the AnchorUTC it pins (CLIENT-CONTRACT §18.5: the
+# daemon reports the registration its labels ride, not a fresh read).
+# ---------------------------------------------------------------------------
+
+from types import SimpleNamespace
+from unittest import mock
+
+import codar_sounder.core.stream as _stream_mod
+
+
+class _FullSnap:
+    """AuthoritySnapshot stand-in with the fields the §3 report needs."""
+    offset_usable = True
+    offset_seconds = 0.004250
+    rtp_to_utc_offset_ns = 4_250_000
+    t_level_active = "T6"
+    sigma_ns = 4210
+    governor_radiod = "AC0G-B4-status.local"
+    utc_published = None
+    host_clock = {"verdict": "ok"}
+
+
+class _FullReader:
+    def read(self):
+        return _FullSnap()
+
+
+class _NoAuthority:
+    def read(self):
+        return None
+
+
+class TestAnchorKeptForTheReport:
+
+    def test_anchor_is_none_before_the_first_anchor(self):
+        assert _src().anchor is None
+
+    def test_compute_anchor_keeps_the_anchor_and_returns_its_datetime(self):
+        src = _src(authority_reader=_FullReader())
+        src._anchor_first_rtp = 1_000_000
+        src._channel_info = SimpleNamespace(ssrc=1)
+        with mock.patch("ka9q.rtp_to_utc", return_value=1_700_000_500.0):
+            dt = src._compute_anchor_utc()
+        assert src.anchor is not None
+        assert src.anchor.offset_ns == 4_250_000
+        assert src.anchor.source == "rtp_to_utc+authority"
+        assert src.anchor.datetime == dt
+        block = src.anchor.timing_authority_applied(client_radiod="rx")
+        assert block["tier"] == "T6"
+
+    def test_anchor_without_authority_has_no_offset(self):
+        src = _src(authority_reader=_NoAuthority())
+        src._anchor_first_rtp = 1_000_000
+        src._channel_info = SimpleNamespace(ssrc=1)
+        with mock.patch("ka9q.rtp_to_utc", return_value=1_700_000_500.0):
+            src._compute_anchor_utc()
+        assert src.anchor.offset_ns is None
+        assert src.anchor.timing_authority_applied(client_radiod="rx") is None
+
+    def test_reprovisioning_drops_the_anchor(self):
+        """``__iter__`` provisions a fresh channel; the old anchor names a
+        stream that no longer exists."""
+        src = _src(authority_reader=_FullReader())
+        src._anchor = object()
+        src._stopped.set()                      # loop exits at once
+        fake_ci = SimpleNamespace(ssrc=7, multicast_address="239.0.0.1", port=5004)
+        fake_control = mock.Mock()
+        fake_control.ensure_channel.return_value = fake_ci
+        with mock.patch.object(_stream_mod, "_ka9q_RadiodControl",
+                               return_value=fake_control, create=True), \
+             mock.patch.object(_stream_mod, "_ka9q_RadiodStream",
+                               return_value=mock.Mock(), create=True):
+            assert list(iter(src)) == []
+        assert src.anchor is None
+
+
+class TestSyntheticSourceHasNoAnchor:
+
+    def test_synthetic_anchor_is_none(self):
+        from codar_sounder.core.stream import SyntheticIQSource
+        s = SyntheticIQSource(
+            sample_rate_hz=64000, cpi_seconds=1.0,
+            sweep_rate_hz_per_s=-25733.913, sweep_repetition_hz=1.0,
+            target_group_range_km=500.0,
+        )
+        assert s.anchor is None

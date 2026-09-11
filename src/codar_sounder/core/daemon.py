@@ -46,6 +46,7 @@ from pathlib import Path
 from typing import Optional
 
 from codar_sounder.config import haversine_km, transmitters
+from codar_sounder.core.applied_state import applied_state_for, applied_state_path
 from codar_sounder.core.dechirp import (
     dechirp,
     positive_range_window,
@@ -426,6 +427,9 @@ class SounderDaemon:
         self.paths = config.get("paths", {})
         self.processing = config.get("processing", {})
         self._stopped = threading.Event()
+        # §18.5 applied-state report: next time (epoch s) the daemon may
+        # write it.  Zero means the first call writes at once.
+        self._applied_state_next_due: float = 0.0
 
         # Phase 6 cutover (RADIOD-IDENTIFICATION.md §3.1): the mDNS
         # multicast status name IS the identifier.
@@ -589,6 +593,9 @@ class SounderDaemon:
             f"READY=1\nSTATUS=processing {len(self.pipelines)} CODAR txs "
             f"on radiod {self.radiod_id}"
         )
+        # Running, no anchor yet: the file says "default mode" until the
+        # first CPI lands and the source has pinned its anchor.
+        self._write_applied_state()
 
         try:
             for cpi_samples, cpi_start_utc in self.iq_source:
@@ -599,10 +606,40 @@ class SounderDaemon:
                 for pipeline in self.pipelines:
                     pipeline.process_cpi(cpi_samples, cpi_start_utc)
                 _sd_notify("WATCHDOG=1")
+                self._write_applied_state()
         except KeyboardInterrupt:
             log.info("interrupted")
         finally:
             self.close()
+
+    #: Minimum spacing between applied-state writes.  CPIs last tens of
+    #: seconds, so the per-CPI call in ``run`` needs a gate; the reader's
+    #: staleness limit (hamsci_dsp DEFAULT_APPLIED_STATE_MAX_AGE_S) sits
+    #: well above this.
+    APPLIED_STATE_PERIOD_S = 60.0
+
+    def _write_applied_state(self, now_fn=None) -> None:
+        """Leave the §3 ``timing_authority_applied`` block this daemon
+        applies at ``<output_dir>/<radiod_id>/timing-authority.json`` for
+        ``inventory --json`` (another process) to report.  At most one
+        write per APPLIED_STATE_PERIOD_S.  Best-effort: the report must
+        never take the daemon down.  See core/applied_state.py."""
+        now = (now_fn or time.time)()
+        if now < self._applied_state_next_due:
+            return
+        self._applied_state_next_due = now + self.APPLIED_STATE_PERIOD_S
+        try:
+            from hamsci_dsp.timing import write_applied_state
+            output_dir = self.paths.get("output_dir", "/var/lib/codar-sounder")
+            write_applied_state(
+                applied_state_path(output_dir, self.radiod_id),
+                applied_state_for(self.iq_source, client_radiod=self.radiod_id,
+                                  now_fn=now_fn),
+                now_fn=now_fn,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.debug("applied-state write for %s failed: %s",
+                      self.radiod_id, exc)
 
     def stop(self) -> None:
         self._stopped.set()

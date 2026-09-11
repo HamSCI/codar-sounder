@@ -224,21 +224,22 @@ Sections implemented:
   `sigmond.wizard_dispatch`.
 - **§17** — additive HamSCI sink writer (`codar.spots`) alongside
   canonical JSONL.
-- **§18 (timing authority)** — the suite-shared
-  `hamsci_dsp.timing.AuthorityReader` subscribes to
-  `/run/hf-timestd/authority.json` and **is** wired into the CPI loop:
-  `stream.py:_compute_anchor_utc` anchors each CPI's UTC via the shared
-  `hamsci_dsp.timing.acquire_anchor_utc` helper (ka9q `rtp_to_utc` +
-  the published offset, METROLOGY §4.5), and
+- **§18 (timing authority)** — `stream.py:_compute_anchor_utc` pins the
+  first delivered sample to UTC through the suite-shared
+  `hamsci_dsp.timing.acquire_anchor_utc` (ka9q `rtp_to_utc` plus the
+  offset hf-timestd publishes in `/run/hf-timestd/authority.json`,
+  METROLOGY §4.5).  Every CPI label projects from that one anchor, so the
+  labels ride the authority whenever `authority.json` reads fresh.
   `output.py` records the provenance block per CPI.  codar free-runs CPI
-  frames off this single anchor — it does **not** use `ka9q.SlotClock`
-  (that's only for epoch-aligned slot recorders).  The inventory
-  `timing_authority_applied` field stays `null` **by design** — `null`
-  reports RTP-default mode (RTP-derived label + opportunistic offset),
-  the same convention `wspr`/`psk` use; it becomes a populated
-  `{source,tier,sigma_ns,...}` object only when a future iteration uses a
-  §18 authority to *gate* behavior (e.g. TX-cycle gating), not merely to
-  offset labels.
+  frames off the anchor and does **not** use `ka9q.SlotClock` (that
+  serves epoch-aligned slot recorders).  `RadiodIQSource.anchor` keeps
+  the `AnchorUTC`; the daemon writes its §3 report from it at most once a
+  minute to `<output_dir>/<radiod_id>/timing-authority.json`
+  (`core/applied_state.py`, path rule shared with `contract.py`).
+  `inventory` reports `uses_timing_calibration = true` and reads
+  `timing_authority_applied` from that file; a stale or absent file
+  reads as `null`.  The report describes the labels only.  Using the
+  authority to *gate* TX-cycle alignment stays open (`CDR-F-092`).
 
 ## Production paths
 

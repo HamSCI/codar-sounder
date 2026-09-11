@@ -79,14 +79,11 @@ class TestInventory:
     def test_contract_version(self):
         assert self.data["contract_version"] == "0.8"
 
-    def test_timing_authority_applied_explicit_null(self):
-        """CONTRACT v0.7 §3/§18 — runtime-state field for the §18
-        subscription. codar-sounder runs in RTP-default mode today
-        (no §18 subscriber wired yet, though it is the most likely
-        future hard-deadline candidate per
-        project_client_contract_v07). Field must be present and
-        explicitly None — distinguishes contract-aware-in-default-mode
-        from a pre-v0.7 client."""
+    def test_timing_authority_applied_null_when_no_daemon_runs(self):
+        """CONTRACT §3/§18.5: the field describes the labels the RUNNING
+        daemon writes.  No daemon has left an applied-state file for this
+        test radiod, so every instance reports an explicit None (present,
+        not missing: a pre-v0.7 client would omit the key)."""
         for inst in self.data["instances"]:
             assert "timing_authority_applied" in inst, (
                 f"instance {inst.get('instance')} missing timing_authority_applied"
@@ -244,3 +241,53 @@ class TestStationTable:
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+# ---------------------------------------------------------------------------
+# §18.5 — timing_authority_applied comes from the running daemon's file
+# ---------------------------------------------------------------------------
+
+class TestTimingAuthorityAppliedFromRuntimeState:
+    """The daemon leaves its applied block at
+    <output_dir>/<radiod_id>/timing-authority.json (one rule,
+    core/applied_state.py); inventory, a separate process, reports it while
+    fresh and None otherwise.  Every tx instance of the radiod shares it."""
+
+    @staticmethod
+    def _state_path() -> Path:
+        from codar_sounder.core.applied_state import applied_state_path
+        return applied_state_path("/tmp/codar-sounder-test/output", "test-status.local")
+
+    def teardown_method(self):
+        self._state_path().unlink(missing_ok=True)
+
+    def _instances(self) -> list[dict]:
+        proc = _run_cli("inventory", "--json")
+        assert proc.returncode == 0, f"stderr: {proc.stderr}"
+        return json.loads(proc.stdout)["instances"]
+
+    def test_fresh_state_file_is_reported_on_every_tx_instance(self):
+        from hamsci_dsp.timing import write_applied_state
+        block = {"source": "hf-timestd@gov", "tier": "T6", "sigma_ns": 4210,
+                 "snapshot_age_s": 1.0, "radiod_id": "test-status.local",
+                 "channels": {"total": 1, "anchored": 1, "applied": 1}}
+        write_applied_state(self._state_path(), block)
+        insts = self._instances()
+        assert len(insts) == 2
+        for inst in insts:
+            assert inst["timing_authority_applied"] == block
+
+    def test_stale_state_file_reports_null(self):
+        import time
+        from hamsci_dsp.timing import write_applied_state
+        write_applied_state(self._state_path(), {"tier": "T6"},
+                            now_fn=lambda: time.time() - 3600)
+        for inst in self._instances():
+            assert inst["timing_authority_applied"] is None
+
+    def test_capability_is_declared(self):
+        """§3: uses_timing_calibration names the capability.  codar anchors
+        through acquire_anchor_utc, which applies the authority whenever
+        hf-timestd publishes one."""
+        for inst in self._instances():
+            assert inst["uses_timing_calibration"] is True

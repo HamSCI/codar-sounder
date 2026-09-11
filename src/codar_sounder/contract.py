@@ -24,7 +24,9 @@ from codar_sounder.config import (
     radiod_blocks,
     transmitters,
 )
+from codar_sounder.core.applied_state import applied_state_path
 from codar_sounder.version import GIT_INFO
+from hamsci_dsp.timing import read_applied_state
 
 
 CONTRACT_VERSION = "0.8"
@@ -57,6 +59,17 @@ def build_inventory(config: dict, config_path: Path) -> dict:
         # multicast status name IS the identifier.
         status_dns = block.get("status", "")
         radiod_id = status_dns
+        # §18.5 (amendment 2026-09-04): the field describes the LABELS the
+        # running daemon writes.  One daemon serves this radiod through one
+        # IQ source, so every transmitter instance under it shares one
+        # anchor and one report.  The daemon leaves the block it applies
+        # at <output_dir>/<radiod_id>/timing-authority.json at most once a
+        # minute (core/applied_state.py).  A stale or absent file reads as
+        # null: nothing running means nothing applied.  Read once per
+        # radiod, not once per transmitter.
+        timing_authority_applied = read_applied_state(
+            applied_state_path(output_dir, radiod_id),
+        )
 
         for tx in transmitters(block):
             tx_id = tx.get("id", "<unnamed>")
@@ -90,20 +103,18 @@ def build_inventory(config: dict, config_path: Path) -> dict:
                 "required_cores": [],
                 "preferred_cores": "worker",
                 "data_sinks": data_sinks,
-                "uses_timing_calibration": False,
+                # §3: capability, not the active mode.  The daemon anchors
+                # its CPI labels through hamsci_dsp.timing.acquire_anchor_utc,
+                # which applies hf-timestd's published RTP->UTC offset
+                # whenever authority.json is fresh.  codar subscribes
+                # whenever it can.
+                "uses_timing_calibration": True,
                 "provides_timing_calibration": False,
-                # CONTRACT v0.7 §18 — runtime-state field for the §18
-                # subscription. codar-sounder runs in RTP-default mode
-                # today; the field is null. NOTE: codar-sounder is the
-                # most likely *hard-deadline* candidate among the
-                # current clients (TX schedule alignment per
-                # project_client_contract_v07) — when a future
-                # codar-sounder iteration subscribes to a §18
-                # authority for tighter TX-cycle gating, this field
-                # will report the live (source, tier, sigma_ns,
-                # snapshot_age_s, radiod_id) the subscriber last
-                # fetched.
-                "timing_authority_applied": None,
+                # See the read above.  This reports the labels only.
+                # Using the authority to GATE behaviour (TX-cycle
+                # alignment) remains a separate, future concern
+                # (REQUIREMENTS CDR-F-092); this field does not claim it.
+                "timing_authority_applied": timing_authority_applied,
             }
             instances.append(instance)
 
