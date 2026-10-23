@@ -167,3 +167,24 @@ class TestSyntheticSourceHasNoAnchor:
             target_group_range_km=500.0,
         )
         assert s.anchor is None
+
+
+class TestAgcPolicy:
+    """Policy 2026-10-23: no per-channel AGC.  The `iq` preset defaults to
+    agc=yes, so the channel request must carry agc_enable=0 and gain 0 dB."""
+
+    def test_channel_request_sends_agc_off_and_zero_gain(self):
+        from types import SimpleNamespace
+        src = _src()
+        src._stopped.set()                      # loop exits at once
+        fake_ci = SimpleNamespace(ssrc=7, multicast_address="239.0.0.1", port=5004)
+        fake_control = mock.Mock()
+        fake_control.ensure_channel.return_value = fake_ci
+        with mock.patch.object(_stream_mod, "_ka9q_RadiodControl",
+                               return_value=fake_control, create=True), \
+             mock.patch.object(_stream_mod, "_ka9q_RadiodStream",
+                               return_value=mock.Mock(), create=True):
+            list(iter(src))
+        kw = fake_control.ensure_channel.call_args.kwargs
+        assert kw["agc_enable"] == 0
+        assert kw["gain"] == 0.0
