@@ -487,10 +487,14 @@ class SounderDaemon:
         # Returns a no-op writer when no sink path is configured and
         # /var/lib/sigmond isn't writable, so this is safe in the
         # standalone (no-sigmond) case too.  Module-not-found means
-        # sigmond.hamsci_sink isn't installed — log and stay file-only.
+        # neither hs_uploader nor sigmond.hamsci_sink is installed — log and stay file-only.
         self.ch_writer = None
         try:
-            from sigmond.hamsci_sink import Writer as _HamsciWriter  # type: ignore[import-not-found]
+            try:
+                from hs_uploader.sink import Writer as _HamsciWriter  # type: ignore[import-not-found]
+            except ImportError:
+                # Fallback for one release: sigmond's older import name.
+                from sigmond.hamsci_sink import Writer as _HamsciWriter  # type: ignore[import-not-found]
             self.ch_writer = _HamsciWriter.from_env(
                 table="spots", mode="codar",
                 schema_version=1, batch_rows=200,

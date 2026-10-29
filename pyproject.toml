@@ -26,6 +26,8 @@ dependencies = [
     # client computes TX-RX geometry identically.  Local-only sibling
     # (not yet on PyPI); resolved editable via [tool.uv.sources] below.
     "hamsci-dsp>=0.8.0",
+    # Sink writer (hs_uploader.sink.Writer); local-only sibling, editable below.
+    "hs-uploader>=0.1.0",
 ]
 
 [project.optional-dependencies]
@@ -54,3 +56,4 @@ testpaths = ["tests"]
 # "ka9q-python>=3.26.0" dependency above still controls what PyPI consumers get.
 ka9q-python = { path = "../ka9q-python", editable = true }
 hamsci-dsp = { path = "../hamsci-dsp", editable = true }
+hs-uploader = { path = "../hs-uploader", editable = true }

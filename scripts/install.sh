@@ -91,6 +91,15 @@ if [[ ! -f /opt/git/sigmond/hamsci-dsp/pyproject.toml ]]; then
         || { ui_error "Failed to clone hamsci-dsp"; exit 1; }
 fi
 
+# hs-uploader supplies the sink writer (hs_uploader.sink.Writer); also a
+# path-based editable sibling, so uv sync needs it on disk.
+if [[ ! -f /opt/git/sigmond/hs-uploader/pyproject.toml ]]; then
+    ui_info "hs-uploader sibling repo not at /opt/git/sigmond/hs-uploader -- cloning"
+    mkdir -p /opt/git/sigmond
+    git clone https://github.com/HamSCI/hs-uploader /opt/git/sigmond/hs-uploader \
+        || { ui_error "Failed to clone hs-uploader"; exit 1; }
+fi
+
 # --- Phase 1: service user ---
 if ! id -u "$SERVICE_USER" &>/dev/null; then
     ui_info "Creating service user $SERVICE_USER"
