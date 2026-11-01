@@ -377,7 +377,9 @@ def _handle_tdma_scan(args):
     )
 
     try:
-        rx_samples = next(iter(iq_source))
+        # Both IQ backends yield (samples, cpi_start_utc); the scan wants
+        # only the samples.
+        rx_samples, _cpi_start_utc = next(iter(iq_source))
     except StopIteration:
         sys.stderr.write("IQ source produced no samples\n")
         sys.exit(3)
