@@ -89,7 +89,9 @@ def main():
                             "shared config otherwise). See sigmond's "
                             "MULTI-INSTANCE-ARCHITECTURE.md §6.")
     p_dae.add_argument("--radiod-id", default=None,
-                       help="ID of the [[radiod]] block to use")
+                       help="status of the [[radiod]] blocks to record "
+                            "(every block with that status; default: "
+                            "every block)")
     _common(p_dae)
 
     p_tdma = sub.add_parser(
@@ -97,7 +99,10 @@ def main():
         help="Capture IQ from a radiod and discover TDMA TX offsets in the band",
     )
     p_tdma.add_argument("--radiod-id", default=None,
-                        help="ID of the [[radiod]] block to use")
+                        help="status of the [[radiod]] blocks to choose from")
+    p_tdma.add_argument("--channel-name", default=None,
+                        help="channel_name of the [[radiod]] block to scan "
+                             "(default: the first block for the radiod)")
     p_tdma.add_argument("--seconds", type=int, default=10,
                         help="Capture duration before discovery (default 10 s)")
     p_tdma.add_argument("--snr-threshold-db", type=float, default=10.0,
@@ -258,9 +263,9 @@ def _handle_daemon(args):
     _install_sighup_handler()
     from codar_sounder.config import (
         extract_reporter_id, load_config, resolve_config_path,
-        resolve_radiod_block,
+        resolve_radiod_blocks,
     )
-    from codar_sounder.core.daemon import SounderDaemon
+    from codar_sounder.core.daemon import MultiBlockDaemon
 
     # Phase-5 cutover (sigmond MULTI-INSTANCE-ARCHITECTURE.md §4):
     # prefer per-instance config when --instance is given and the file
@@ -272,27 +277,27 @@ def _handle_daemon(args):
     )
     config = load_config(config_path)
     try:
-        block = resolve_radiod_block(config, args.radiod_id)
+        blocks = resolve_radiod_blocks(config, args.radiod_id)
     except ValueError:
         # Post-`smd instance migrate` soft-cutover: the systemd
         # template still passes --radiod-id %i (= reporter ID),
         # which doesn't match the [[radiod]] block's id (= mDNS
         # source label) in the per-instance config.  When --instance
         # was given the per-instance config defines this instance's
-        # source unambiguously; fall through to None (single-block
-        # resolution).  Warn so the mismatch stays visible.  Legacy
+        # source unambiguously; fall through to None (every block in
+        # the file).  Warn so the mismatch stays visible.  Legacy
         # multi-radiod shared configs (no --instance) keep strict id
         # matching.
         if args.radiod_id is None or instance is None:
             raise
         logging.getLogger("codar_sounder.daemon").warning(
             "--radiod-id=%r did not match any [[radiod]] block in %s "
-            "(--instance=%r); falling through to single-block "
-            "per-instance path.  Drop --radiod-id from the systemd "
+            "(--instance=%r); falling through to every block in the "
+            "per-instance config.  Drop --radiod-id from the systemd "
             "template once all reporters are migrated.",
             args.radiod_id, config_path, instance,
         )
-        block = resolve_radiod_block(config, None)
+        blocks = resolve_radiod_blocks(config, None)
 
     # Per-instance reporter_id from [instance] block; None during the
     # cutover (legacy shared config has no such block).  Row-construction
@@ -301,13 +306,18 @@ def _handle_daemon(args):
 
     log = logging.getLogger("codar_sounder.daemon")
     log.info(
-        "starting codar-sounder daemon for radiod %s "
+        "starting codar-sounder daemon for radiod %s, %d block(s) "
         "(config=%s, reporter_id=%s)",
-        block.get("status", "<unconfigured>"), config_path,
+        ",".join(sorted({b.get("status", "<unconfigured>") for b in blocks})),
+        len(blocks), config_path,
         reporter_id or "<derived from radiod_id at row time>",
     )
 
-    daemon = SounderDaemon(config, block, reporter_id=reporter_id)
+    try:
+        daemon = MultiBlockDaemon(config, blocks, reporter_id=reporter_id)
+    except ValueError as exc:
+        log.error("refusing to start: %s", exc)
+        sys.exit(2)
     daemon.run()
 
 
@@ -331,7 +341,7 @@ def _handle_tdma_scan(args):
     """
     _install_sighup_handler()
     from codar_sounder.config import (
-        haversine_km, load_config, resolve_radiod_block, transmitters,
+        haversine_km, load_config, resolve_radiod_blocks, transmitters,
     )
     from codar_sounder.core.stream import make_iq_source
     from codar_sounder.core.tdma import (
@@ -340,7 +350,22 @@ def _handle_tdma_scan(args):
 
     config_path = _resolved_config_path(args)
     config = load_config(config_path)
-    block = resolve_radiod_block(config, args.radiod_id)
+    blocks = resolve_radiod_blocks(config, args.radiod_id)
+    # One capture covers one channel: scan the block the operator names,
+    # else the first.
+    channel_name = getattr(args, "channel_name", None)
+    if channel_name is None:
+        block = blocks[0]
+    else:
+        named = [b for b in blocks if b.get("channel_name") == channel_name]
+        if not named:
+            have = ", ".join(str(b.get("channel_name", "?")) for b in blocks)
+            sys.stderr.write(
+                f"no [[radiod]] block with channel_name="
+                f"{channel_name!r}; have: {have}\n"
+            )
+            sys.exit(2)
+        block = named[0]
 
     txs = list(transmitters(block))
     if not txs:

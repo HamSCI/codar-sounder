@@ -68,3 +68,51 @@ def test_tdma_scan_unpacks_the_sample_tuple(tmp_path, monkeypatch, capsys):
                               write_config=False, log_level=None)
     cli._handle_tdma_scan(args)
     assert '"capture_seconds": 2' in capsys.readouterr().out
+
+
+SECOND_BLOCK = """
+[[radiod]]
+status = "test-status.local"
+channel_name = "codar-4537khz"
+
+[[radiod.transmitter]]
+id = "DUCK"
+center_freq_hz = 4537180
+sweep_rate_hz_per_s = -25733.913
+sweep_bw_hz = 25734
+sweep_repetition_hz = 1
+tx_lat_deg = 36.180350
+tx_lon_deg = -75.750133
+"""
+
+
+def _two_block_scan(tmp_path, monkeypatch, capsys, channel_name):
+    import json
+    cfg = tmp_path / "codar.toml"
+    cfg.write_text(CONFIG.format(out=tmp_path) + SECOND_BLOCK)
+    seen = {}
+
+    def _factory(**kw):
+        seen.update(kw)
+        return _TupleSource(8000 * 2)
+
+    monkeypatch.setattr(stream, "make_iq_source", _factory)
+    args = argparse.Namespace(config=cfg, radiod_id="test-status.local",
+                              channel_name=channel_name, seconds=2,
+                              snr_threshold_db=10.0, json=True,
+                              write_config=False, log_level=None)
+    cli._handle_tdma_scan(args)
+    return seen, json.loads(capsys.readouterr().out)
+
+
+def test_tdma_scan_defaults_to_the_first_block(tmp_path, monkeypatch, capsys):
+    seen, out = _two_block_scan(tmp_path, monkeypatch, capsys, None)
+    assert out["channel_name"] == "codar-13mhz"
+    assert int(seen["center_freq_hz"]) == 13_450_000
+
+
+def test_tdma_scan_channel_name_picks_the_block(tmp_path, monkeypatch, capsys):
+    seen, out = _two_block_scan(tmp_path, monkeypatch, capsys, "codar-4537khz")
+    assert out["channel_name"] == "codar-4537khz"
+    assert int(seen["center_freq_hz"]) == 4_537_180
+    assert [t["id"] for t in out["tx_assignments"]] == ["DUCK"]

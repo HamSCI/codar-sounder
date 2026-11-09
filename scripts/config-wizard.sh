@@ -8,7 +8,8 @@
 # instead of hand-writing [[radiod.transmitter]] blocks, the operator
 # multi-selects from the known CODAR sites ranked by distance from the
 # receiver (`codar-sounder stations --json`).  The chosen sites are
-# grouped by band into one [[radiod]] block each and written through
+# grouped by centre frequency into one [[radiod]] block each (one radiod
+# channel per centre) and written through
 # `codar-sounder config apply --json -`, so the Python side owns
 # schema/type validation and the units bridge (MHz → Hz) is never done
 # by hand.
@@ -169,7 +170,7 @@ n_sites=$(( ${#CHECK_ARGS[@]} / 3 ))
 PICKED=$(whiptail --title "Select CODAR transmitters to record" \
     --backtitle "$BACKTITLE" --separate-output \
     --checklist "Pre-checked sites are in the prime one-hop window (200–2000 km).
-Sites in the same band are grouped into one radiod channel automatically." \
+Sites on the same centre frequency share one radiod channel automatically." \
     "$HEIGHT" "$WIDTH" "$LIST_HEIGHT" \
     "${CHECK_ARGS[@]}" \
     3>&1 1>&2 2>&3) || exit 0
@@ -186,27 +187,25 @@ if [[ ${#PICKED_IDS[@]} -eq 0 ]]; then
 fi
 
 # -------- 4. build payload + apply ------------------------------------
-# Group the chosen sites by band into one [[radiod]] block each (a single
-# radiod IQ channel covers one band).  All blocks share the operator's
-# radiod status; channel_name is derived per band.  config apply does the
-# schema validation; stations.to_tx_block does the MHz→Hz units bridge.
+# Group the chosen sites by exact centre frequency into one [[radiod]]
+# block each: a block opens one 64 kHz IQ channel at its centre, so sites
+# 235 kHz apart in one band (4.550 vs 4.785 MHz) need separate blocks.
+# All blocks share the operator's radiod status; channel_name is derived
+# per centre (codar-<kHz>khz).  config apply does the schema validation;
+# stations.to_tx_block does the MHz→Hz units bridge.
 PAYLOAD=$(STN_JSON="$STN_JSON" CALL="$CALL" GRID="$GRID" \
           RX_LAT="$RX_LAT" RX_LON="$RX_LON" STATUS="$RADIOD_STATUS" \
           PICKED="${PICKED_IDS[*]}" python3 <<'PYEOF'
-import json, os, re
+import json, os
 d = json.loads(os.environ["STN_JSON"])
 by_id = {t["id"]: t for t in d["transmitters"]}
 picked = [p for p in os.environ["PICKED"].split() if p in by_id]
 
-def chan_name(band: str) -> str:
-    m = re.search(r"([\d.]+)", band)
-    return f"codar-{m.group(1)}mhz" if m else "codar"
-
-# band label -> list of transmitter blocks
-bands: dict[str, list] = {}
+# centre frequency (Hz) -> list of transmitter blocks
+centres: dict[int, list] = {}
 for pid in picked:
     t = by_id[pid]
-    bands.setdefault(t["band"], []).append({
+    centres.setdefault(int(t["center_freq_hz"]), []).append({
         "id": t["id"],
         "center_freq_hz": t["center_freq_hz"],
         "sweep_rate_hz_per_s": t["sweep_rate_hz_per_s"],
@@ -217,10 +216,10 @@ for pid in picked:
     })
 
 radiod = []
-for band, txs in sorted(bands.items()):
+for centre_hz, txs in sorted(centres.items()):
     radiod.append({
         "status": os.environ["STATUS"],
-        "channel_name": chan_name(band),
+        "channel_name": f"codar-{centre_hz // 1000}khz",
         "transmitter": txs,
     })
 
@@ -245,9 +244,9 @@ if ! printf '%s' "$PAYLOAD" | \
     exit 1
 fi
 
-n_bands=$(printf '%s' "$PAYLOAD" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["radiod"]))')
+n_chans=$(printf '%s' "$PAYLOAD" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["radiod"]))')
 whiptail --title "Configuration written" --backtitle "$BACKTITLE" \
-    --msgbox "Wrote ${#PICKED_IDS[@]} transmitter(s) across ${n_bands} band/channel(s).
+    --msgbox "Wrote ${#PICKED_IDS[@]} transmitter(s) across ${n_chans} channel(s).
 
 Next:
   codar-sounder validate --json

@@ -121,8 +121,8 @@ sudo smd config init codar-sounder        # whiptail multi-select picker
 
 It lists the known sites ranked by distance from your receiver
 (pre-checking those in the prime 200–2000 km one-hop window), groups
-your choices by band into radiod channels, and writes a validated
-config.  To preview the ranked inventory without configuring:
+your choices by centre frequency, and writes a validated config.  To
+preview the ranked inventory without configuring:
 
 ```
 codar-sounder stations --receiver-lat <lat> --receiver-lon <lon>
@@ -132,6 +132,29 @@ codar-sounder stations --receiver-lat <lat> --receiver-lon <lon> --json   # for 
 The site database (`data/codar-stations.toml`) is canonical: the picker
 generates the MHz→Hz frequency and sweep parameters from it, so a
 hand-typed transcription error can't slip into the config.
+
+### How the config maps onto radiod channels
+
+Each `[[radiod]]` block opens one radiod IQ channel (64 kHz wide by
+default) tuned to its transmitters' shared centre frequency.  Sites in
+one band can sit far apart: 4.550 MHz and 4.785 MHz lie 235 kHz apart,
+so one channel cannot hear both.  The picker therefore writes one block
+per distinct centre, named `codar-<kHz>khz` (e.g. `codar-4785khz`), and
+lists every site on that centre under it.
+
+All the blocks for one radiod carry the same `status`, and one daemon
+instance (`codar-sounder@<radiod-id>`) records every one of them, each
+in its own thread.  A block that fails restarts on its own after 30 s
+without disturbing the others.  The daemon pets the systemd watchdog
+while at least one block delivers data.  When every block falls
+silent, the pets stop and systemd restarts the unit.  Any block that
+stops or goes stale logs an ERROR once, when its state changes, and the
+unit's status line shows how many channels are healthy.
+
+`config apply`, `validate` and the daemon refuse a block whose
+transmitters' centres differ by more than ±2 kHz, and two blocks of one
+radiod that share a `channel_name`.  `codar-sounder tdma-scan` scans one
+block at a time; pick it with `--channel-name` (default: the first).
 
 ## Install
 

@@ -40,12 +40,13 @@ from hamsci_dsp.geometry import bearing_deg, great_circle_km
 # ---------------------------------------------------------------------------
 # Band grouping.
 #
-# A single [[radiod]] block opens ONE wideband IQ channel, so the
-# transmitters listed under it must share a band.  These coarse bins
-# (drawn from the allocations actually present in codar-stations.toml)
-# group the inventory by propagation class so the picker can offer one
-# band at a time.  The label is informational; the (lo, hi) edges in MHz
-# decide membership.
+# These coarse bins (drawn from the allocations actually present in
+# codar-stations.toml) group the inventory by propagation class so an
+# operator can filter by band.  The label is informational; the (lo, hi)
+# edges in MHz decide membership.  A band does NOT map to a [[radiod]]
+# block: a block opens one 64 kHz channel at one centre, so the picker
+# writes one block per distinct centre_freq_hz (see config.py,
+# radiod_block_errors).
 # ---------------------------------------------------------------------------
 
 BANDS: list[tuple[float, float, str]] = [

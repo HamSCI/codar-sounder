@@ -119,7 +119,8 @@ src/codar_sounder/
   core/
     stations.py           # CODAR tx inventory + audibility ranking (audible_transmitters,
                           #   the MHz→Hz units bridge) — analogue of superdarn core/radars.py
-    daemon.py             # orchestrates the per-CPI pipeline below
+    daemon.py             # per-CPI pipeline below; MultiBlockDaemon supervises
+                          #   one SounderDaemon thread per [[radiod]] block
     stream.py             # RadiodIQSource — wideband IQ via ka9q-python
                           #   (uses low_edge/high_edge kwargs added in ≥3.11)
     dechirp.py            # Kaeppler §2.1 dechirp + range-Doppler FFT
@@ -154,7 +155,10 @@ tasks/                    # planning notes
   `core/radars.py:audible_radars`).  `codar-sounder stations [--json]`
   surfaces that inventory; the `config init` whiptail wizard
   (`scripts/config-wizard.sh`) renders it as a multi-select, groups the
-  chosen sites by band into one `[[radiod]]` block each, and writes them
+  chosen sites by exact centre frequency into one `[[radiod]]` block each
+  (`codar-<kHz>khz`; a block = one 64 kHz channel, so every transmitter in
+  it must sit within ±2 kHz of its centre — `config.radiod_block_errors`,
+  enforced by config apply, validate and daemon start), and writes them
   via `config apply`.  The picker owns the **MHz→Hz units bridge**
   (`freq_mhz` → `center_freq_hz`), so generated configs can't carry the
   hand-transcription errors hand-edited blocks were prone to (e.g. a
@@ -174,6 +178,11 @@ tasks/                    # planning notes
   editable via `[tool.uv.sources]` (local sibling, not yet on PyPI).
 - **One systemd instance per radiod**
   (`codar-sounder@<radiod_id>.service`), matching the other recorders.
+  It records every `[[radiod]]` block whose `status` names that radiod
+  (every block when no radiod-id is given): `daemon.MultiBlockDaemon`
+  runs one `SounderDaemon` (one channel) per block in its own thread,
+  restarts a failed block after 30 s, and pets the watchdog only while
+  at least one block has delivered a CPI within 3 × CPI.
 - **Wideband IQ, not the iq-preset audio filter.** `RadiodIQSource`
   passes `low_edge=` / `high_edge=` to `ensure_channel()` (ka9q-python
   ≥3.11) so the CODAR chirp edges aren't truncated by the iq preset's

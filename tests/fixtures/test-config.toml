@@ -1,5 +1,7 @@
-# Synthetic config for unit tests.  Three CODAR transmitters at 4.5 MHz
-# off the US east coast, all visible from a single notional radiod.
+# Synthetic config for unit tests.  Two CODAR transmitters near 4.5 MHz
+# off the US east coast, both visible from a single notional radiod.
+# Their centres sit 38 kHz apart, so each gets its own [[radiod]] block
+# (one channel per centre).
 
 [station]
 callsign     = "TEST"
@@ -13,7 +15,7 @@ log_dir    = "/tmp/codar-sounder-test/log"
 
 [[radiod]]
 status       = "test-status.local"
-channel_name = "codar-4mhz"
+channel_name = "codar-4537khz"
 
 [[radiod.transmitter]]
 id                  = "DUCK"
@@ -23,6 +25,10 @@ sweep_bw_hz         = 25734
 sweep_repetition_hz = 1
 tx_lat_deg          = 36.180350
 tx_lon_deg          = -75.750133
+
+[[radiod]]
+status       = "test-status.local"
+channel_name = "codar-4575khz"
 
 [[radiod.transmitter]]
 id                  = "LISL"

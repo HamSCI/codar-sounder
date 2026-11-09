@@ -93,9 +93,9 @@ table) · Kaeppler et al. (2022) as the methodological reference.
   authority offset (`stream.py:_compute_anchor_utc`), never the host wall clock
   (METROLOGY §4.5 invariant); synthetic mode MAY use wall clock.
 - `CDR-C-003` `[DOC]` ✅ One systemd instance SHALL run **per radiod**
-  (`codar-sounder@<radiod_id>`), each reporting *all* the CODAR transmitters it
-  dechirps in parallel; a transmitter is a per-record `station_id`, not an
-  instance key.
+  (`codar-sounder@<radiod_id>`), recording *every* `[[radiod]]` block whose
+  `status` names that radiod and reporting all the CODAR transmitters it
+  dechirps; a transmitter is a per-record `station_id`, not an instance key.
 - `CDR-C-004` `[DOC]` ✅ The canonical site DB (`data/codar-stations.toml`,
   CODAR-FMCW only) SHALL be the sole source of per-site sweep parameters; the
   picker generates config from it and owns the MHz→Hz units bridge.
@@ -103,8 +103,10 @@ table) · Kaeppler et al. (2022) as the methodological reference.
   sibling libs (`ka9q-python`, `hamsci-dsp`) SHALL be editable installs so a
   `git pull` propagates without reinstall.
 - `CDR-C-006` `[CODE]` ✅ All transmitters under one `[[radiod]]` block SHALL share
-  a band (one wideband IQ subscription); co-band transmitters are separated by
-  per-TX dechirp parameters and optional TDMA phase offset.
+  the block's centre frequency within ±2 kHz (one wideband IQ channel per
+  block); config apply, `validate` and daemon start refuse a block that breaks
+  this, and duplicate `channel_name`s on one radiod.  Same-centre transmitters
+  are separated by per-TX dechirp parameters and optional TDMA phase offset.
 
 ## 6. Functional requirements
 
@@ -113,9 +115,11 @@ table) · Kaeppler et al. (2022) as the methodological reference.
   `RadiodIQSource` (ka9q-python), framing contiguous **CPIs** (default 60 s,
   `sample_rate_hz` default 64000), with a `SyntheticIQSource` fallback (loud
   warning) for test/dev.
-- `CDR-F-002` `[CODE]` ✅ SHALL open **one IQ subscription per radiod** and fan
-  each CPI out across every configured `[[radiod.transmitter]]`, each with its
-  own dechirp replica and clutter mask.
+- `CDR-F-002` `[CODE]` ✅ SHALL open **one IQ subscription per `[[radiod]]`
+  block**, each in its own thread, and fan each CPI out across the block's
+  `[[radiod.transmitter]]` entries, each with its own dechirp replica and
+  clutter mask.  One block's failure SHALL NOT stop the others; the systemd
+  watchdog SHALL be petted only while at least one block delivers CPIs.
 - `CDR-F-003` `[CODE]` ✅ SHALL set a radiod channel `LIFETIME` (default
   `2 × CPI × 50` frames), refreshed each CPI, so a crashed daemon's channel
   self-destructs; `0`/`None` means explicit-infinite.
@@ -180,8 +184,8 @@ table) · Kaeppler et al. (2022) as the methodological reference.
   each with band, bearing, and `in_prime_range` (200–2000 km window).
 - `CDR-F-061` `[DOC]` ✅ `config init|edit` SHALL present a **whiptail multi-select
   picker** (via `sigmond.wizard_dispatch`) pre-checking prime-range sites,
-  grouping choices by band into one `[[radiod]]` block each, and writing them via
-  `config apply`.
+  grouping choices by exact centre frequency into one `[[radiod]]` block each
+  (`channel_name = codar-<kHz>khz`), and writing them via `config apply`.
 - `CDR-F-062` `[CODE]` ✅ The picker SHALL own the MHz→Hz **units bridge**
   (`freq_mhz` → `center_freq_hz`) so generated `[[radiod.transmitter]]` blocks
   cannot carry hand-transcription errors.
@@ -191,8 +195,8 @@ table) · Kaeppler et al. (2022) as the methodological reference.
   whiptail).
 
 ### 6.8 TDMA discovery
-- `CDR-F-070` `[DOC]` 🟡 `tdma-scan` SHALL probe TDMA slot assignments for co-band
-  transmitters; `tdma_config_writer.py` SHALL render the discovered
+- `CDR-F-070` `[DOC]` 🟡 `tdma-scan` SHALL probe TDMA slot assignments for
+  same-centre transmitters in one block (`--channel-name`, default the first); `tdma_config_writer.py` SHALL render the discovered
   `tdma_offset_samples` into config. *(Operator-run tool; not wired into the
   daemon loop.)*
 

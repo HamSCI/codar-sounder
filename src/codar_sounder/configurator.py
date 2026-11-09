@@ -3,8 +3,9 @@
 The interactive path is a whiptail **transmitter picker** (v0.2):
 ``scripts/config-wizard.sh`` lets the operator multi-select which CODAR
 sites to record from the distance-ranked inventory
-(``codar-sounder stations``), grouped by band into ``[[radiod]]`` blocks
-and written back via ``config apply``.  Dispatched through
+(``codar-sounder stations``), grouped by centre frequency into
+``[[radiod]]`` blocks (one channel each) and written back via
+``config apply``.  Dispatched through
 ``sigmond.wizard_dispatch`` (same gate/contract the other recorders use).
 
 The non-interactive path (no TTY, ``--non-interactive``, or whiptail
@@ -331,6 +332,15 @@ def cmd_config_apply(args) -> int:
     else:
         existing = {}
     merged = _deep_merge(existing, payload)
+
+    # Each [[radiod]] block opens one channel at one centre; refuse a
+    # config the daemon would refuse at start.
+    from codar_sounder.config import radiod_block_errors, radiod_blocks
+    block_errors = radiod_block_errors(radiod_blocks(merged))
+    if block_errors:
+        for message in block_errors:
+            print(f"config apply: {message}", file=sys.stderr)
+        return 2
 
     text = _serialize_toml(merged)
     config_path.parent.mkdir(parents=True, exist_ok=True)

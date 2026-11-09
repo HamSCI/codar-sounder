@@ -16,9 +16,11 @@ receiver_lon = 0.0
 output_dir   = "/var/lib/codar-sounder"
 log_dir      = "/var/log/codar-sounder"
 
-# One [[radiod]] block per local radiod that codar-sounder uses.
-# Each daemon (one per systemd instance) picks the matching block via
-# --radiod-id.
+# One [[radiod]] block per radiod channel: one centre frequency, opened
+# as one IQ channel.  A radiod that serves several centres gets several
+# blocks with the same `status` and distinct `channel_name`s.  Each
+# daemon (one per systemd instance) records every block whose `status`
+# matches its --radiod-id.
 #
 # channel_name is informational only — the v0.4+ daemon provisions
 # the radiod channel dynamically via ka9q-python's ensure_channel()
@@ -35,12 +37,13 @@ log_dir      = "/var/log/codar-sounder"
 # placeholder unchanged to make the daemon refuse to start until
 # the operator runs the configurator.
 status = "<configure-via-config-init>"
-channel_name = "codar-4mhz"
+channel_name = "codar-4537khz"
 
-# One [[radiod.transmitter]] per CODAR transmitter audible from this
-# radiod's antenna at the channel_name's centre frequency.  Multiple
-# US-east-coast 4.537 MHz transmitters share the same band; list each
-# separately so the dechirper knows their per-station sweep parameters.
+# One [[radiod.transmitter]] per CODAR transmitter on this block's centre
+# frequency.  Every transmitter in a block must sit within ±2 kHz of it
+# (config apply / validate / the daemon refuse otherwise).  Several
+# US-east-coast transmitters share 4.537 MHz; list each separately so
+# the dechirper knows their per-station sweep parameters.
 #
 # You normally DON'T hand-write these blocks: run the picker instead —
 #   sudo smd config init codar-sounder      (whiptail multi-select)
@@ -67,11 +70,20 @@ tx_lon_deg          = -75.750133
 # tx_lat_deg          = 35.257217
 # tx_lon_deg          = -75.519883
 
-# A second radiod (e.g. a north-pointing antenna) gets its own block:
+# Another centre on the same radiod gets its own block, same status:
+#
+# [[radiod]]
+# status       = "<same as above>"
+# channel_name = "codar-4785khz"
+# [[radiod.transmitter]]
+# id           = "..."
+# ...
+#
+# A second radiod (e.g. a north-pointing antenna) gets its own blocks:
 #
 # [[radiod]]
 # status       = "bee3-status.local"
-# channel_name = "codar-4mhz"
+# channel_name = "codar-4537khz"
 # [[radiod.transmitter]]
 # id           = "MVCO"
 # ...

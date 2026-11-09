@@ -21,6 +21,7 @@ from typing import Any
 from codar_sounder.config import (
     haversine_km,
     missing_tx_fields,
+    radiod_block_errors,
     radiod_blocks,
     transmitters,
 )
@@ -44,8 +45,10 @@ def build_inventory(config: dict, config_path: Path) -> dict:
 
     One ``instances[]`` entry per configured ``[[radiod.transmitter]]`` —
     a single daemon (one radiod) reports all the CODAR transmitters it
-    is dechirping in parallel.  Same shape wspr-recorder uses to report
-    multiple receivers under one daemon.
+    is dechirping in parallel, across every ``[[radiod]]`` block (one
+    channel per block) it records.  Each entry names its block's
+    ``channel_name``.  Same shape wspr-recorder uses to report multiple
+    receivers under one daemon.
     """
     paths = config.get("paths", {})
     log_dir = paths.get("log_dir", "/var/log/codar-sounder")
@@ -60,9 +63,10 @@ def build_inventory(config: dict, config_path: Path) -> dict:
         status_dns = block.get("status", "")
         radiod_id = status_dns
         # §18.5 (amendment 2026-09-04): the field describes the LABELS the
-        # running daemon writes.  One daemon serves this radiod through one
-        # IQ source, so every transmitter instance under it shares one
-        # anchor and one report.  The daemon leaves the block it applies
+        # running daemon writes.  One daemon serves this radiod, one IQ
+        # source per block; it reports the anchor of one healthy block,
+        # so every transmitter instance under the radiod shares one
+        # report.  The daemon leaves the block it applies
         # at <output_dir>/<radiod_id>/timing-authority.json at most once a
         # minute (core/applied_state.py).  A stale or absent file reads as
         # null: nothing running means nothing applied.  Read once per
@@ -97,9 +101,10 @@ def build_inventory(config: dict, config_path: Path) -> dict:
                 "radiod_id": inventory_radiod_id,
                 "host": "localhost",
                 "radiod_status_dns": status_dns,
+                "channel_name": block.get("channel_name", ""),
                 "data_destination": None,
                 "frequencies_hz": [freq] if freq else [],
-                "ka9q_channels": 0,             # we share one channel across TXs
+                "ka9q_channels": 0,             # one channel per block, shared by its TXs
                 "required_cores": [],
                 "preferred_cores": "worker",
                 "data_sinks": data_sinks,
@@ -190,6 +195,12 @@ def _collect_issues(config: dict) -> list[dict]:
             "severity": "fail", "instance": "all",
             "message": "no [[radiod]] blocks configured",
         })
+
+    # One block = one channel at one centre: refuse a block whose
+    # transmitters cannot all be heard on it, and duplicate channel names.
+    for message in radiod_block_errors(blocks):
+        issues.append({"severity": "fail", "instance": "all",
+                       "message": message})
 
     for block in blocks:
         rid = block.get("status", "<unnamed>")

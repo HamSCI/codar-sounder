@@ -4,19 +4,21 @@ Config layout (per-host, multi-radiod aware):
 
     [station]            — operator identity + receiver location
     [paths]              — output_dir, log_dir
-    [[radiod]]           — one block per local radiod that codar-sounder uses
-        id              = "..."
-        status_dns      = "..."
-        channel_name    = "..."
+    [[radiod]]           — one block per radiod channel (one centre frequency)
+        status          = "..."   (radiod mDNS status name)
+        channel_name    = "..."   (unique among blocks of one radiod)
         [[radiod.transmitter]]
             id, center_freq_hz, sweep_rate_hz_per_s,
             sweep_bw_hz, sweep_repetition_hz,
             tx_lat_deg, tx_lon_deg
     [processing]         — coherent_seconds, range bounds, snr threshold
 
-Daemon is started with --radiod-id <id>; resolve_radiod_block() picks
-the matching [[radiod]] block.  Multiple daemons can run on one host,
-one per radiod.
+Every transmitter in a block shares the block's centre frequency
+(within CENTER_TOLERANCE_HZ): the block opens one radiod channel tuned
+there.  A radiod that serves several centres carries several blocks
+with the same ``status``.  The daemon is started with --radiod-id <id>;
+resolve_radiod_blocks() returns every matching block and the daemon
+records them all.  Multiple daemons can run on one host, one per radiod.
 """
 
 from __future__ import annotations
@@ -138,6 +140,86 @@ def resolve_radiod_block(config: dict, radiod_id: str | None) -> dict:
     raise ValueError(
         f"no [[radiod]] block with status={radiod_id!r}; have: {have}"
     )
+
+
+def resolve_radiod_blocks(config: dict, radiod_id: str | None) -> list[dict]:
+    """Return every [[radiod]] block whose ``status`` equals radiod_id.
+
+    With radiod_id None, returns every block (single-radiod hosts and
+    the per-instance config, where the file itself names the source).
+    Raises ValueError if no block matches.
+    """
+    blocks = radiod_blocks(config)
+    if not blocks:
+        raise ValueError("config has no [[radiod]] blocks")
+    if radiod_id is None:
+        return blocks
+    matched = [b for b in blocks if b.get("status") == radiod_id]
+    if matched:
+        return matched
+    have = ", ".join(b.get("status", "<unnamed>") for b in blocks)
+    raise ValueError(
+        f"no [[radiod]] block with status={radiod_id!r}; have: {have}"
+    )
+
+
+#: Every transmitter in a [[radiod]] block must sit within this many Hz of
+#: the block's centre (its first transmitter's ``center_freq_hz``).  The
+#: block opens one 64 kHz channel there; a chirp centred further out is
+#: partly or wholly outside it.  This bounds what the channel can HEAR,
+#: not what the dechirp ranges correctly: dechirp assumes each chirp sits
+#: at the channel centre, so an offset of df Hz shifts that transmitter's
+#: group range by c * df / |sweep_rate| (about 580 km per 50 Hz at
+#: 4.5 MHz).  The picker therefore groups by EXACT centre.
+CENTER_TOLERANCE_HZ = 2000
+
+
+def block_center_freq_hz(block: dict) -> Optional[int]:
+    """The centre the block's channel tunes to: its first transmitter's."""
+    for tx in transmitters(block):
+        if "center_freq_hz" in tx:
+            return int(tx["center_freq_hz"])
+    return None
+
+
+def radiod_block_errors(blocks: list[dict]) -> list[str]:
+    """One-line reasons to refuse a set of [[radiod]] blocks.
+
+    Refuses a block whose transmitters do not all share its centre
+    (within CENTER_TOLERANCE_HZ), and two blocks of one radiod that
+    share a ``channel_name``.  Config apply, ``validate`` and daemon
+    start all run this check.
+    """
+    errors: list[str] = []
+    seen: dict[tuple[str, str], int] = {}
+    for block in blocks:
+        status = str(block.get("status", "<unnamed>"))
+        name = str(block.get("channel_name", ""))
+        if name:
+            seen[(status, name)] = seen.get((status, name), 0) + 1
+        centre = block_center_freq_hz(block)
+        if centre is None:
+            continue
+        off = [
+            f"{t.get('id', '<unnamed>')} ({int(t['center_freq_hz'])} Hz)"
+            for t in transmitters(block)
+            if "center_freq_hz" in t
+            and abs(int(t["center_freq_hz"]) - centre) > CENTER_TOLERANCE_HZ
+        ]
+        if off:
+            errors.append(
+                f"[[radiod]] block {name or '<no channel_name>'} "
+                f"(status={status}) tunes to {centre} Hz; transmitters "
+                f"more than {CENTER_TOLERANCE_HZ} Hz away cannot be heard "
+                f"on it: {', '.join(off)}"
+            )
+    for (status, name), n in seen.items():
+        if n > 1:
+            errors.append(
+                f"channel_name {name!r} appears in {n} [[radiod]] blocks "
+                f"for status={status}; each block needs its own"
+            )
+    return errors
 
 
 def transmitters(block: dict) -> list[dict]:

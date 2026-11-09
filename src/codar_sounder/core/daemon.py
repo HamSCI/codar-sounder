@@ -1,9 +1,12 @@
 """Sounder daemon — v0.4.
 
-End-to-end pipeline.  One ``SounderDaemon`` per radiod, fanning each
-CPI out across every configured ``[[radiod.transmitter]]``:
+End-to-end pipeline.  One ``SounderDaemon`` per ``[[radiod]]`` block (one
+radiod channel at one centre frequency), fanning each CPI out across
+the block's ``[[radiod.transmitter]]`` entries.  One process records
+every block of its radiod: ``MultiBlockDaemon`` runs each block's
+``SounderDaemon`` in its own thread and owns the systemd watchdog.
 
-    radiod IQ channel (one subscription per radiod)
+    radiod IQ channel (one subscription per block)
         ↓ ka9q-python RadiodStream (or synthetic fallback)
     contiguous CPI of complex64 samples
         ↓ per-transmitter pipeline:
@@ -45,7 +48,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from codar_sounder.config import haversine_km, transmitters
+from codar_sounder.config import (
+    haversine_km,
+    radiod_block_errors,
+    transmitters,
+)
 from codar_sounder.core.applied_state import applied_state_for, applied_state_path
 from codar_sounder.core.dechirp import (
     dechirp,
@@ -394,16 +401,57 @@ class _TransmitterPipeline:
         self.writer.close()
 
 
+def _make_sink_writer():
+    """CONTRACT v0.6 §17 — the local HamSCI sink writer, or None.
+
+    The writer serialises its own use (it holds a lock), so one writer
+    serves every block of a ``MultiBlockDaemon``.
+    """
+    # Returns a no-op writer when no sink path is configured and
+    # /var/lib/sigmond isn't writable, so this is safe in the
+    # standalone (no-sigmond) case too.  Module-not-found means
+    # neither hs_uploader nor sigmond.hamsci_sink is installed — log and stay file-only.
+    try:
+        try:
+            from hs_uploader.sink import Writer as _HamsciWriter  # type: ignore[import-not-found]
+        except ImportError:
+            # Fallback for one release: sigmond's older import name.
+            from sigmond.hamsci_sink import Writer as _HamsciWriter  # type: ignore[import-not-found]
+        writer = _HamsciWriter.from_env(
+            table="spots", mode="codar",
+            schema_version=1, batch_rows=200,
+        )
+        log.info(
+            "sink writer health=%s (database=%s)",
+            writer.health, writer.database,
+        )
+        return writer
+    except ImportError:
+        log.debug("sigmond.hamsci_sink not available; sink path disabled")
+    except Exception as exc:
+        log.warning("sink writer init failed (%s); JSONL path unaffected", exc)
+    return None
+
+
+#: Sentinel: SounderDaemon builds (and later closes) its own sink writer.
+_OWN_WRITER = object()
+
+
 class SounderDaemon:
-    """One daemon per radiod.  Iterates the IQ source, fans each CPI
-    out across the configured transmitters, and writes JSONL records.
+    """One daemon per ``[[radiod]]`` block.  Iterates the block's IQ
+    source, fans each CPI out across the block's transmitters, and
+    writes JSONL records.
 
     Key design choices (see plan §"One daemon instance per radiod"):
 
-      * One IQ subscription per radiod — every transmitter in the same
-        band is dechirped from the *same* CPI in parallel.  TDMA-offset
-        CODAR transmitters that share a band get separate dechirp
-        passes with their own sweep parameters.
+      * One IQ subscription per block — every transmitter on the
+        block's centre frequency is dechirped from the *same* CPI.
+        TDMA-offset CODAR transmitters that share a centre get separate
+        dechirp passes with their own sweep parameters.
+
+      * ``supervised=True`` (set by ``MultiBlockDaemon``) leaves the
+        systemd notifications and the applied-state report to the
+        supervisor, which speaks for every block of the radiod.
 
       * The clutter mask is per-transmitter, not per-radiod, because
         different sweep rates produce different ground-clutter
@@ -420,12 +468,15 @@ class SounderDaemon:
         radiod_block: dict,
         *,
         reporter_id: Optional[str] = None,
+        sink_writer=_OWN_WRITER,
+        supervised: bool = False,
     ):
         self.config = config
         self.radiod = radiod_block
         self.station = config.get("station", {})
         self.paths = config.get("paths", {})
         self.processing = config.get("processing", {})
+        self.supervised = supervised
         self._stopped = threading.Event()
         # §18.5 applied-state report: next time (epoch s) the daemon may
         # write it.  Zero means the first call writes at once.
@@ -482,37 +533,19 @@ class SounderDaemon:
         output_dir = Path(self.paths.get("output_dir", "/var/lib/codar-sounder"))
 
         # CONTRACT v0.6 §17 — local HamSCI sink (SQLite store-and-
-        # forward queue).  One Writer per daemon, shared across all
-        # transmitter pipelines (they all write to codar.spots).
-        # Returns a no-op writer when no sink path is configured and
-        # /var/lib/sigmond isn't writable, so this is safe in the
-        # standalone (no-sigmond) case too.  Module-not-found means
-        # neither hs_uploader nor sigmond.hamsci_sink is installed — log and stay file-only.
-        self.ch_writer = None
-        try:
-            try:
-                from hs_uploader.sink import Writer as _HamsciWriter  # type: ignore[import-not-found]
-            except ImportError:
-                # Fallback for one release: sigmond's older import name.
-                from sigmond.hamsci_sink import Writer as _HamsciWriter  # type: ignore[import-not-found]
-            self.ch_writer = _HamsciWriter.from_env(
-                table="spots", mode="codar",
-                schema_version=1, batch_rows=200,
-            )
-            log.info(
-                "sink writer health=%s (database=%s)",
-                self.ch_writer.health, self.ch_writer.database,
-            )
-        except ImportError:
-            log.debug("sigmond.hamsci_sink not available; sink path disabled")
-        except Exception as exc:
-            log.warning("sink writer init failed (%s); JSONL path unaffected", exc)
+        # forward queue).  Shared across all transmitter pipelines (they
+        # all write to codar.spots); a supervisor passes one writer to
+        # every block and closes it itself.
+        self._owns_writer = sink_writer is _OWN_WRITER
+        self.ch_writer = (
+            _make_sink_writer() if self._owns_writer else sink_writer
+        )
 
         host_call = str(self.station.get("callsign", ""))
         host_grid = str(self.station.get("grid_square", ""))
         proc_version = self._processing_version_string()
 
-        # All transmitters in this radiod's band share one IQ
+        # All transmitters on this block's centre share one IQ
         # subscription; the daemon dechirps each separately.
         self.pipelines: list[_TransmitterPipeline] = []
         for tx in transmitters(radiod_block):
@@ -580,7 +613,13 @@ class SounderDaemon:
             lifetime_frames=lifetime_for_source,
         )
 
-    def run(self) -> None:
+    def run(self, on_cpi=None) -> None:
+        """Process CPIs until stopped or the source ends.
+
+        ``on_cpi`` (no arguments) runs after every CPI; the supervisor
+        uses it to time each block's progress.  Exceptions from the IQ
+        source propagate (after ``close``) so a supervisor can see them.
+        """
         if not self.pipelines:
             log.error("no transmitters configured for radiod %s — exiting",
                       self.radiod_id)
@@ -593,13 +632,14 @@ class SounderDaemon:
             self.coherent_seconds,
             [p.station_id for p in self.pipelines],
         )
-        _sd_notify(
-            f"READY=1\nSTATUS=processing {len(self.pipelines)} CODAR txs "
-            f"on radiod {self.radiod_id}"
-        )
-        # Running, no anchor yet: the file says "default mode" until the
-        # first CPI lands and the source has pinned its anchor.
-        self._write_applied_state()
+        if not self.supervised:
+            _sd_notify(
+                f"READY=1\nSTATUS=processing {len(self.pipelines)} CODAR txs "
+                f"on radiod {self.radiod_id}"
+            )
+            # Running, no anchor yet: the file says "default mode" until
+            # the first CPI lands and the source has pinned its anchor.
+            self._write_applied_state()
 
         try:
             for cpi_samples, cpi_start_utc in self.iq_source:
@@ -609,8 +649,11 @@ class SounderDaemon:
                 # dechirps with its own sweep params, finds its own peak.
                 for pipeline in self.pipelines:
                     pipeline.process_cpi(cpi_samples, cpi_start_utc)
-                _sd_notify("WATCHDOG=1")
-                self._write_applied_state()
+                if on_cpi is not None:
+                    on_cpi()
+                if not self.supervised:
+                    _sd_notify("WATCHDOG=1")
+                    self._write_applied_state()
         except KeyboardInterrupt:
             log.info("interrupted")
         finally:
@@ -653,7 +696,7 @@ class SounderDaemon:
     def close(self) -> None:
         for pipeline in self.pipelines:
             pipeline.close()
-        if self.ch_writer is not None:
+        if self._owns_writer and self.ch_writer is not None:
             try:
                 self.ch_writer.close()
             except Exception as exc:
@@ -672,3 +715,185 @@ class SounderDaemon:
         except Exception:
             short = ""
         return f"{base}+{short}" if short else base
+
+
+class _Block:
+    """Supervisor-side state of one ``[[radiod]]`` block."""
+
+    def __init__(self, daemon: SounderDaemon):
+        self.daemon = daemon
+        self.name = daemon.channel_name
+        self.thread: Optional[threading.Thread] = None
+        # True while the block's SounderDaemon.run is on the stack.
+        self.running = False
+        # time.monotonic() of the block's last CPI, or of its (re)start
+        # before the first CPI lands.
+        self.last_progress = 0.0
+        self.state: Optional[str] = None       # healthy / stale / down
+        self.last_error: Optional[str] = None
+
+    def health(self, now: float, stale_after_s: float) -> str:
+        if not self.running:
+            return "down"
+        if now - self.last_progress > stale_after_s:
+            return "stale"
+        return "healthy"
+
+
+class MultiBlockDaemon:
+    """Record every ``[[radiod]]`` block of one radiod in one process.
+
+    Each block (one channel at one centre frequency) gets its own
+    ``SounderDaemon`` in its own thread, processed exactly as a lone
+    block is.  All blocks share one sink writer.  The supervisor:
+
+      * restarts a block whose run raised or ended, after
+        ``restart_backoff_s`` (None = never restart; tests use this);
+      * logs each block's health on change only — healthy, stale (no
+        CPI for ``stale_after_s``) or down (its run is not on the
+        stack) — at ERROR for stale/down;
+      * pets the systemd watchdog only while at least one block is
+        healthy.  When every block is stale or down the pets stop and
+        systemd restarts the unit; a partial outage keeps the process
+        up and stays loud in the log and in the unit's STATUS line.
+    """
+
+    #: Supervisor poll period.  Well inside the unit's WatchdogSec=180.
+    POLL_S = 10.0
+    #: Wait before re-running a block whose run raised or ended.
+    RESTART_BACKOFF_S = 30.0
+
+    def __init__(
+        self,
+        config: dict,
+        radiod_blocks: list[dict],
+        *,
+        reporter_id: Optional[str] = None,
+        restart_backoff_s: Optional[float] = RESTART_BACKOFF_S,
+        poll_s: float = POLL_S,
+    ):
+        errors = radiod_block_errors(radiod_blocks)
+        if errors:
+            raise ValueError("; ".join(errors))
+        self.config = config
+        self.restart_backoff_s = restart_backoff_s
+        self.poll_s = float(poll_s)
+        self._stopped = threading.Event()
+        coherent_seconds = float(
+            config.get("processing", {}).get("coherent_seconds", 60)
+        )
+        # Three CPIs without one landing marks a block stale.
+        self.stale_after_s = 3.0 * coherent_seconds
+
+        self.ch_writer = _make_sink_writer()
+        self.blocks: list[_Block] = []
+        for block in radiod_blocks:
+            if not transmitters(block):
+                log.error("[[radiod]] block %s has no transmitters — skipped",
+                          block.get("channel_name", "<unnamed>"))
+                continue
+            self.blocks.append(_Block(SounderDaemon(
+                config, block, reporter_id=reporter_id,
+                sink_writer=self.ch_writer, supervised=True,
+            )))
+
+    def run(self) -> None:
+        if not self.blocks:
+            log.error("no [[radiod]] blocks with transmitters — exiting")
+            self._close_writer()
+            return
+        log.info(
+            "starting %d block(s): %s", len(self.blocks),
+            ", ".join(f"{b.name}@{b.daemon.radiod_id}" for b in self.blocks),
+        )
+        for blk in self.blocks:
+            blk.running = True
+            blk.last_progress = time.monotonic()
+            blk.thread = threading.Thread(
+                target=self._block_loop, args=(blk,),
+                name=f"codar-{blk.name}", daemon=True,
+            )
+            blk.thread.start()
+        n_tx = sum(len(b.daemon.pipelines) for b in self.blocks)
+        _sd_notify(
+            f"READY=1\nSTATUS=processing {n_tx} CODAR txs on "
+            f"{len(self.blocks)} channel(s)"
+        )
+        try:
+            while not self._stopped.is_set():
+                self._check_health(time.monotonic())
+                if not any(b.thread.is_alive() for b in self.blocks):
+                    break               # only when restarts are disabled
+                self._stopped.wait(self.poll_s)
+        except KeyboardInterrupt:
+            log.info("interrupted")
+        finally:
+            self.stop()
+            for blk in self.blocks:
+                blk.thread.join(timeout=10)
+            self._close_writer()
+
+    def _block_loop(self, blk: _Block) -> None:
+        def _progress():
+            blk.last_progress = time.monotonic()
+            blk.last_error = None
+
+        while not self._stopped.is_set():
+            blk.running = True
+            blk.last_progress = time.monotonic()
+            try:
+                blk.daemon.run(on_cpi=_progress)
+                reason = "IQ source ended"
+            except Exception as exc:  # noqa: BLE001 — one block never stops the rest
+                reason = f"{type(exc).__name__}: {exc}"
+            blk.running = False
+            if self._stopped.is_set():
+                return
+            # A block that keeps failing the same way logs it once.
+            if reason != blk.last_error:
+                log.error("block %s stopped: %s", blk.name, reason)
+                blk.last_error = reason
+            if self.restart_backoff_s is None:
+                return
+            self._stopped.wait(self.restart_backoff_s)
+
+    def _check_health(self, now: float) -> None:
+        """Log health changes, keep STATUS current, pet the watchdog."""
+        changed = False
+        for blk in self.blocks:
+            state = blk.health(now, self.stale_after_s)
+            if state == blk.state:
+                continue
+            changed = True
+            if state == "healthy":
+                log.info("block %s healthy", blk.name)
+            else:
+                log.error(
+                    "block %s %s (txs %s)", blk.name,
+                    "stale: no CPI for over %.0f s" % self.stale_after_s
+                    if state == "stale" else "down",
+                    ",".join(p.station_id for p in blk.daemon.pipelines),
+                )
+            blk.state = state
+        healthy = [b for b in self.blocks if b.state == "healthy"]
+        if changed:
+            _sd_notify(
+                f"STATUS={len(healthy)}/{len(self.blocks)} channel(s) healthy"
+            )
+        if healthy:
+            _sd_notify("WATCHDOG=1")
+            # One report per radiod: every block's labels come from the
+            # same radiod clock; a healthy block speaks for them.
+            healthy[0].daemon._write_applied_state()
+
+    def stop(self) -> None:
+        self._stopped.set()
+        for blk in self.blocks:
+            blk.daemon.stop()
+
+    def _close_writer(self) -> None:
+        if self.ch_writer is not None:
+            try:
+                self.ch_writer.close()
+            except Exception as exc:
+                log.warning("sink writer close failed: %s", exc)
