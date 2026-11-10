@@ -44,7 +44,10 @@ StandardError=inherit
 SyslogIdentifier=codar-sounder@%i
 
 Nice=5
-MemoryMax=512M
+# One instance now records every [[radiod]] block for its radiod (a560105); 512M held one
+# channel but OOM-killed 4 channels at KFS on every first 60 s window (2026-11-10).  2G covers
+# a handful of 64 kHz channels until per-channel memory comes down.
+MemoryMax=2G
 MemorySwapMax=0
 
 NoNewPrivileges=true
