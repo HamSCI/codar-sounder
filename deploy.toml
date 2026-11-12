@@ -73,6 +73,9 @@ mode  = "0755"
 
 [systemd]
 templated_units = ["codar-sounder@.service"]
+# One instance per radiod named in codar-sounder-config.toml's [[radiod]] blocks
+# (placeholder skipped): sigmond starts codar-sounder@<radiod> for each.
+instances_from = "config-radiods"
 
 # CONTRACT v0.6 §17 — the daemon writes one row per detected peak per
 # CPI to the local HamSCI sink (SQLite store-and-forward queue under

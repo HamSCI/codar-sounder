@@ -140,3 +140,38 @@ def test_radiods_come_from_coordination_env_when_the_environment_lacks_them(tmp_
     f.write_text("RADIOD_X_STATUS=x-status.local\nRADIOD_Y_STATUS=y-status.local\nOTHER=1\n")
     assert configurator._sigmond_radiods({}, f) == ["x-status.local", "y-status.local"]
     assert configurator._sigmond_radiods({"SIGMOND_RADIOD_STATUS": "z.local"}, f) == ["z.local"]
+
+
+def test_a_configured_file_is_never_picked_over(tmp_path):
+    # W2NAF, UACNJ, AC0G/ND kept hand-built configs from the capture work; an
+    # unattended init must leave a config that names a real radiod alone.
+    target = tmp_path / "codar.toml"
+    target.write_text('[station]\ncallsign = "W2NAF"\n\n[[radiod]]\nstatus = "w2naf-status.local"\n'
+                      'channel_name = "codar-4mhz"\n\n[[radiod.transmitter]]\nid = "HOOK"\n'
+                      'center_freq_hz = 4463000\nsweep_rate_hz_per_s = -25733.913\nsweep_bw_hz = 25734\n'
+                      'sweep_repetition_hz = 1.0\ntx_lat_deg = 40.4\ntx_lon_deg = -73.9\n')
+    before = target.read_text()
+    args = SimpleNamespace(non_interactive=True, reconfig=False, config=str(target))
+    with mock.patch.dict(os.environ, {"SIGMOND_RADIOD_COUNT": "1",
+                                      "SIGMOND_RADIOD_STATUS": "w2naf-status.local",
+                                      "STATION_GRID": "FN21ei"}), \
+         mock.patch.object(configurator, "_discover_radiods", return_value=[]):
+        assert configurator.cmd_config_init(args) == 0
+    assert target.read_text() == before
+
+
+def test_the_installer_template_is_picked_over(tmp_path):
+    target = tmp_path / "codar.toml"
+    template = (Path(configurator.__file__).resolve().parents[2] / "config"
+                / "codar-sounder-config.toml.template").read_text()
+    target.write_text(template)
+    args = SimpleNamespace(non_interactive=True, reconfig=False, config=str(target))
+    with mock.patch.dict(os.environ, {"SIGMOND_RADIOD_COUNT": "1",
+                                      "SIGMOND_RADIOD_STATUS": "sigma-status.local",
+                                      "STATION_GRID": "EM38ww"}), \
+         mock.patch.object(configurator, "_discover_radiods", return_value=[]), \
+         mock.patch.object(configurator, "COORDINATION_ENV", tmp_path / "absent.env"):
+        assert configurator.cmd_config_init(args) == 0
+    import tomllib
+    cfg = tomllib.loads(target.read_text())
+    assert {b["status"] for b in cfg["radiod"]} == {"sigma-status.local"}

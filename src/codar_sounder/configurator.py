@@ -40,10 +40,35 @@ def cmd_config_init(args) -> int:
             if rv != 0:
                 return rv
         return _exec_wizard(args, "init")
+    target = Path(getattr(args, "config", None) or DEFAULT_CONFIG_PATH)
+    # The picker writes only a fresh file, one --reconfig asked for, or the
+    # template install.sh left (its radiod still the placeholder).  A config
+    # that names a real radiod is somebody's choice (W2NAF, UACNJ, AC0G/ND
+    # kept hand-built ones, 2026-11-12) and stays as it is.
+    pick = (not target.exists() or bool(getattr(args, "reconfig", False))
+            or _is_unconfigured(target))
     rv = _legacy_config_init(args)
-    if rv == 0:
+    if rv == 0 and pick:
         rv = _unattended_pick(args)
     return rv
+
+
+_PLACEHOLDER_STATUS = "<configure-via-config-init>"
+
+
+def _is_unconfigured(path: Path) -> bool:
+    """True when the file has [[radiod]] blocks and every status is still
+    the install placeholder: the template install.sh left."""
+    try:
+        with open(path, "rb") as fh:
+            data = tomllib.load(fh)
+    except Exception:  # noqa: BLE001 -- unreadable stays "configured": never clobber
+        return False
+    blocks = data.get("radiod") or []
+    if isinstance(blocks, dict):
+        blocks = [blocks]
+    statuses = [str(b.get("status", "")).strip() for b in blocks if isinstance(b, dict)]
+    return bool(statuses) and all(st == _PLACEHOLDER_STATUS for st in statuses)
 
 
 # Channels (centre frequencies) an unattended init records, unless
