@@ -119,8 +119,12 @@ class _TransmitterPipeline:
         host_grid: str = "",
         processing_version: str = "",
         reporter_id: Optional[str] = None,
+        sigmondb_hook=None,
     ):
         self.station_id = tx_config["id"]
+        # Called with (result, cpi_start_utc) after each good dechirp, on
+        # the first transmitter of each sweep group only (core/sigmondb.py).
+        self.sigmondb_hook = sigmondb_hook
         self.tx_config = tx_config
         self.center_freq_hz = int(tx_config["center_freq_hz"])
         self.sweep_rate_hz_per_s = float(tx_config["sweep_rate_hz_per_s"])
@@ -194,6 +198,9 @@ class _TransmitterPipeline:
         except Exception as exc:
             log.warning("[%s] dechirp failed: %s", self.station_id, exc)
             return None
+
+        if self.sigmondb_hook is not None:
+            self.sigmondb_hook(result, cpi_start_utc)
 
         ranges_km, profile = positive_range_window(result, range_profile(result))
 
@@ -437,6 +444,26 @@ def _make_sink_writer():
 _OWN_WRITER = object()
 
 
+def _make_sigmondb_emitter(reporter_id):
+    """The sigmondb row emitter on the local sink (core/sigmondb.py).
+
+    The rows leave reporter_id empty on purpose: sigmondb's ingest files an
+    empty one under the uploading site, and refuses one whose callsign
+    differs from the site's.  KFS-MAIN uploads for KFS-OMNI's radiod, so a
+    per-radiod reporter id would lose every row.  The radiod travels in
+    engineering instead."""
+    from codar_sounder import __version__
+    del reporter_id
+    try:
+        from codar_sounder.core import sigmondb
+    except ImportError as exc:
+        # hamsci-dsp older than its sigmondb_rows module: keep the physics.
+        log.warning("sigmondb rows off (%s); update hamsci-dsp", exc)
+        return None
+    return sigmondb.Emitter(sigmondb.make_writers(), reporter_id="",
+                            detector_version=f"codar-sounder/{__version__}")
+
+
 class SounderDaemon:
     """One daemon per ``[[radiod]]`` block.  Iterates the block's IQ
     source, fans each CPI out across the block's transmitters, and
@@ -469,6 +496,7 @@ class SounderDaemon:
         *,
         reporter_id: Optional[str] = None,
         sink_writer=_OWN_WRITER,
+        sigmondb_emitter=_OWN_WRITER,
         supervised: bool = False,
     ):
         self.config = config
@@ -541,6 +569,13 @@ class SounderDaemon:
             _make_sink_writer() if self._owns_writer else sink_writer
         )
 
+        # sigmondb rows (core/sigmondb.py): shared like the sink writer.
+        self._owns_emitter = sigmondb_emitter is _OWN_WRITER
+        self.sigmondb = (
+            _make_sigmondb_emitter(self.reporter_id)
+            if self._owns_emitter else sigmondb_emitter
+        )
+
         host_call = str(self.station.get("callsign", ""))
         host_grid = str(self.station.get("grid_square", ""))
         proc_version = self._processing_version_string()
@@ -548,6 +583,13 @@ class SounderDaemon:
         # All transmitters on this block's centre share one IQ
         # subscription; the daemon dechirps each separately.
         self.pipelines: list[_TransmitterPipeline] = []
+        # Transmitters that share a sweep group differ only by TDMA offset and
+        # see the same arrivals, so only the group's first one writes rows.
+        groups: dict = {}
+        for tx in transmitters(radiod_block):
+            key = (int(tx["center_freq_hz"]), float(tx["sweep_rate_hz_per_s"]))
+            groups.setdefault(key, []).append(tx)
+        leaders = {id(txs[0]): [t["id"] for t in txs] for txs in groups.values()}
         for tx in transmitters(radiod_block):
             self.pipelines.append(_TransmitterPipeline(
                 receiver_lat=receiver_lat,
@@ -566,6 +608,9 @@ class SounderDaemon:
                 host_grid=host_grid,
                 processing_version=proc_version,
                 reporter_id=self.reporter_id,
+                sigmondb_hook=(self._sigmondb_hook(tx, leaders[id(tx)])
+                               if id(tx) in leaders and self.sigmondb is not None
+                               and self.sigmondb.active else None),
             ))
 
         # Pick the dominant sweep rate / SRF for the synthetic fallback
@@ -693,9 +738,25 @@ class SounderDaemon:
         if hasattr(self.iq_source, "stop"):
             self.iq_source.stop()
 
+    def _sigmondb_hook(self, tx: dict, expected: list):
+        emitter = self.sigmondb
+        centre = float(tx["center_freq_hz"])
+        tdma = int(tx.get("tdma_offset_samples", 0))
+        period = 1.0 / float(tx["sweep_repetition_hz"])
+
+        def hook(result, cpi_start_utc):
+            emitter.emit(result=result, cpi_start_utc=cpi_start_utc,
+                         tdma_offset_samples=tdma, centre_hz=centre, period_s=period,
+                         expected=expected, duration_s=self.coherent_seconds,
+                         anchor=getattr(self.iq_source, "anchor", None),
+                         radiod=self.radiod_id)
+        return hook
+
     def close(self) -> None:
         for pipeline in self.pipelines:
             pipeline.close()
+        if self._owns_emitter and self.sigmondb is not None:
+            self.sigmondb.close()
         if self._owns_writer and self.ch_writer is not None:
             try:
                 self.ch_writer.close()
@@ -786,6 +847,7 @@ class MultiBlockDaemon:
         self.stale_after_s = 3.0 * coherent_seconds
 
         self.ch_writer = _make_sink_writer()
+        self.sigmondb = _make_sigmondb_emitter(reporter_id)
         self.blocks: list[_Block] = []
         for block in radiod_blocks:
             if not transmitters(block):
@@ -794,7 +856,8 @@ class MultiBlockDaemon:
                 continue
             self.blocks.append(_Block(SounderDaemon(
                 config, block, reporter_id=reporter_id,
-                sink_writer=self.ch_writer, supervised=True,
+                sink_writer=self.ch_writer, sigmondb_emitter=self.sigmondb,
+                supervised=True,
             )))
 
     def run(self) -> None:
@@ -892,6 +955,8 @@ class MultiBlockDaemon:
             blk.daemon.stop()
 
     def _close_writer(self) -> None:
+        if self.sigmondb is not None:
+            self.sigmondb.close()
         if self.ch_writer is not None:
             try:
                 self.ch_writer.close()

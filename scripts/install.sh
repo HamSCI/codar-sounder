@@ -124,6 +124,20 @@ if ! id -u "$SERVICE_USER" &>/dev/null; then
             "$SERVICE_USER"
 fi
 
+# The sink (/var/lib/sigmond/sink.db, root:sigmond 0664, dir 2775) takes the
+# codar.spots rows and the sigmondb chirp rows.  Without the sigmond group
+# every insert fails "attempt to write a readonly database" (KFS-MAIN held no
+# codar rows at all, 2026-11-12).  Same step as hfdl-recorder and psk-recorder;
+# the group comes from sigmond/install.sh, so re-run this afterwards if absent.
+if getent group sigmond &>/dev/null; then
+    if ! id -nG "$SERVICE_USER" 2>/dev/null | tr ' ' '\n' | grep -qx sigmond; then
+        usermod -a -G sigmond "$SERVICE_USER"
+        ui_info "Added $SERVICE_USER to sigmond group"
+    fi
+else
+    ui_info "sigmond group not present yet -- re-run after sigmond install"
+fi
+
 # --- Phase 2: repo + venv ---
 if [[ ! -d "$REPO_SOURCE" ]] && [[ ! -L "$REPO_SOURCE" ]]; then
     ui_info "Linking $REPO_ROOT -> $REPO_SOURCE"

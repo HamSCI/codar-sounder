@@ -104,6 +104,69 @@ version = ">=1.24.0"
 venv    = "/opt/git/sigmond/codar-sounder/venv"
 
 # ---------------------------------------------------------------------------
+# sigmondb rows -> wd30 (tasks/chirp-registry/2026-11-12-codar-sigmondb-design.md).
+# The same tables and tar tags as hfdl-recorder's: sigmondb's ingest never asks
+# which program wrote a row, so chirp-recorder declares these same two later.
+# sigmond renders them only for an hs-uploader that offers "sigmondb-tar".
+# ---------------------------------------------------------------------------
+
+[[hs_uploader.pipeline]]
+name = "codar-sigmondb-arrival"
+requires_features = ["sigmondb-tar"]
+batch_limit = 5000
+[hs_uploader.pipeline.source]
+type = "sqlite"
+database = "sigmondb"
+table = "arrival"
+accepted_schema_versions = [1]
+producer = "codar-sounder"          # no start_at: the rows are new; ship from the first
+[hs_uploader.pipeline.transport]
+type = "wsprdaemon_tar"
+name = "wsprdaemon-tar-sftp:codar-sigmondb-arrival"
+servers = ["gw1.wsprdaemon.org", "gw2.wsprdaemon.org"]
+version = "4.0"
+receiver = "{call_pathsafe}"
+compression = "bz2"
+tar_root = "wsprdaemon"
+primary_table_name = "sigmondb.arrival"
+tar_tag = "chirp-arrival"
+[hs_uploader.pipeline.transport.ftp_fallback]
+servers = ["gw2.wsprdaemon.org"]
+ftp_user = "noisegraphs"
+remote_path = "upload"
+[hs_uploader.pipeline.retry]
+base = 2.0
+cap_sec = 900.0
+
+[[hs_uploader.pipeline]]
+name = "codar-sigmondb-capture"
+requires_features = ["sigmondb-tar"]
+batch_limit = 5000
+[hs_uploader.pipeline.source]
+type = "sqlite"
+database = "sigmondb"
+table = "capture"
+accepted_schema_versions = [1]
+producer = "codar-sounder"
+[hs_uploader.pipeline.transport]
+type = "wsprdaemon_tar"
+name = "wsprdaemon-tar-sftp:codar-sigmondb-capture"
+servers = ["gw1.wsprdaemon.org", "gw2.wsprdaemon.org"]
+version = "4.0"
+receiver = "{call_pathsafe}"
+compression = "bz2"
+tar_root = "wsprdaemon"
+primary_table_name = "sigmondb.capture"
+tar_tag = "chirp-capture"
+[hs_uploader.pipeline.transport.ftp_fallback]
+servers = ["gw2.wsprdaemon.org"]
+ftp_user = "noisegraphs"
+remote_path = "upload"
+[hs_uploader.pipeline.retry]
+base = 2.0
+cap_sec = 900.0
+
+# ---------------------------------------------------------------------------
 # Sigmond UI hooks (drop-in registration for `smd watch` + TUI Activity).
 # Consumed by lib/sigmond/client_features.py.
 # ---------------------------------------------------------------------------

@@ -55,6 +55,9 @@ PrivateTmp=false
 ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=/var/lib/codar-sounder /var/log/codar-sounder
+# The sink: codar.spots and the sigmondb chirp rows (core/sigmondb.py).  The
+# "-" lets a host without sigmond or hs-uploader start anyway.
+ReadWritePaths=-/var/lib/hs-uploader -/var/lib/sigmond
 ReadOnlyPaths=/etc/codar-sounder
 PrivateNetwork=false
 
