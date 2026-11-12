@@ -47,7 +47,8 @@ def _init(tmp_path, env):
     base = {k: v for k, v in os.environ.items()
             if not k.startswith(("SIGMOND_", "STATION_", "CODAR_"))}
     with mock.patch.dict(os.environ, {**base, **env}, clear=True), \
-         mock.patch.object(configurator, "_discover_radiods", return_value=[]):
+         mock.patch.object(configurator, "_discover_radiods", return_value=[]), \
+         mock.patch.object(configurator, "COORDINATION_ENV", tmp_path / "absent.env"):
         rc = configurator.cmd_config_init(args)
     return rc, (tomllib.loads(target.read_text()) if target.exists() else None)
 
@@ -115,3 +116,27 @@ def test_under_sigmond_the_grid_centre_serves_without_coordinates(tmp_path):
     assert cfg["station"]["receiver_lat"] == 42.5625
     assert cfg["station"]["receiver_lon"] == -71.375
     assert "DUCK" not in {t["id"] for b in cfg["radiod"] for t in b["transmitter"]}
+
+
+def test_two_radiods_get_the_same_channels_each(tmp_path):
+    # AC0G-B2 reads B1A and B1B, on different antennas; sigmond leaves
+    # SIGMOND_RADIOD_STATUS empty and publishes RADIOD_*_STATUS for each.
+    rc, cfg = _init(tmp_path, {
+        "SIGMOND_RADIOD_COUNT": "2", "STATION_GRID": "EM38ww",
+        "RADIOD_AC0G_B1_A_STATUS_LOCAL_STATUS": "ac0g-b1-a-status.local",
+        "RADIOD_AC0G_B1_B_STATUS_LOCAL_STATUS": "ac0g-b1-b-status.local",
+        "CODAR_MAX_CENTRES": "2"})
+    assert rc == 0
+    by = {}
+    for b in cfg["radiod"]:
+        by.setdefault(b["status"], []).append(b["channel_name"])
+    assert set(by) == {"ac0g-b1-a-status.local", "ac0g-b1-b-status.local"}
+    assert by["ac0g-b1-a-status.local"] == by["ac0g-b1-b-status.local"]
+    assert len(by["ac0g-b1-a-status.local"]) == 2
+
+
+def test_radiods_come_from_coordination_env_when_the_environment_lacks_them(tmp_path):
+    f = tmp_path / "coordination.env"
+    f.write_text("RADIOD_X_STATUS=x-status.local\nRADIOD_Y_STATUS=y-status.local\nOTHER=1\n")
+    assert configurator._sigmond_radiods({}, f) == ["x-status.local", "y-status.local"]
+    assert configurator._sigmond_radiods({"SIGMOND_RADIOD_STATUS": "z.local"}, f) == ["z.local"]

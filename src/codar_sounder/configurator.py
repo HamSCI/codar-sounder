@@ -52,6 +52,29 @@ def cmd_config_init(args) -> int:
 DEFAULT_MAX_CENTRES = 4
 
 
+COORDINATION_ENV = Path("/etc/sigmond/coordination.env")
+
+
+def _sigmond_radiods(env, coordination_env: Optional[Path] = None) -> list:
+    """The radiods sigmond binds: SIGMOND_RADIOD_STATUS when it names one;
+    with several, sigmond leaves that empty, so every RADIOD_*_STATUS it
+    publishes -- from the environment, else from coordination.env, since
+    an init elevated through sudo may not carry the station's env."""
+    one = env.get("SIGMOND_RADIOD_STATUS", "").strip()
+    if one:
+        return [one]
+    pairs = {k: v for k, v in env.items() if k.startswith("RADIOD_") and k.endswith("_STATUS")}
+    if not pairs:
+        try:
+            for line in (coordination_env or COORDINATION_ENV).read_text().splitlines():
+                k, sep, v = line.partition("=")
+                if sep and k.startswith("RADIOD_") and k.endswith("_STATUS"):
+                    pairs[k] = v
+        except OSError:
+            pass
+    return sorted({v.strip().strip('"') for v in pairs.values() if v.strip()})
+
+
 def _unattended_pick(args) -> int:
     """Under sigmond, replace the template's worked example with the nearest
     transmitters, capped at ``CODAR_MAX_CENTRES`` channels (Michael,
@@ -60,8 +83,10 @@ def _unattended_pick(args) -> int:
     drives.  Without sigmond, or without the station's coordinates and
     radiod, the template stays for the operator to finish."""
     env = os.environ
-    status = env.get("SIGMOND_RADIOD_STATUS", "").strip()
-    if "SIGMOND_RADIOD_COUNT" not in env or not status:
+    if "SIGMOND_RADIOD_COUNT" not in env:
+        return 0
+    statuses = _sigmond_radiods(env)
+    if not statuses:
         return 0
     try:
         lat, lon = float(env["STATION_LAT"]), float(env["STATION_LON"])
@@ -108,9 +133,12 @@ def _unattended_pick(args) -> int:
     processing = dict(cfg.get("processing") or {})
     processing["sample_rate_hz"] = sample_rate_for(c.sweep_bw_hz for c in picked)
     cfg["processing"] = processing
+    # One block per radiod and centre: a station whose radiods sit on
+    # different antennas (B1A and B1B behind AC0G-B2) records each.
     cfg["radiod"] = [{"status": status,
                       "channel_name": f"codar-{hz // 1000}khz",
                       "transmitter": txs}
+                     for status in statuses
                      for hz, txs in sorted(centres.items())]
     from codar_sounder.config import radiod_block_errors, radiod_blocks
     errors = radiod_block_errors(radiod_blocks(cfg))
@@ -121,7 +149,8 @@ def _unattended_pick(args) -> int:
         return 1
     target.write_text(_serialize_toml(cfg), encoding="utf-8")
     print(f"codar-sounder: recording {len(picked)} transmitter(s) on "
-          f"{len(centres)} channel(s) (cap {cap}): "
+          f"{len(centres)} channel(s) (cap {cap}) per radiod, "
+          f"{len(statuses)} radiod(s) ({', '.join(statuses)}): "
           + ", ".join(c.id for c in picked))
     return 0
 
