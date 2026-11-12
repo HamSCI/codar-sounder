@@ -67,6 +67,15 @@ def test_under_sigmond_init_writes_capped_blocks_for_the_bound_radiod(tmp_path):
     assert cfg["station"]["receiver_lat"] == KFS[0]
 
 
+def test_without_a_cap_init_records_two_centres(tmp_path):
+    rc, cfg = _init(tmp_path, {
+        "SIGMOND_RADIOD_COUNT": "1", "SIGMOND_RADIOD_STATUS": "kfs-omni-status.local",
+        "STATION_CALL": "KFS", "STATION_GRID": "CM87ui",
+        "STATION_LAT": str(KFS[0]), "STATION_LON": str(KFS[1])})
+    assert rc == 0
+    assert len(cfg["radiod"]) == 2
+
+
 def test_standalone_init_still_copies_the_template(tmp_path):
     rc, cfg = _init(tmp_path, {"STATION_LAT": str(KFS[0]), "STATION_LON": str(KFS[1])})
     assert rc == 0

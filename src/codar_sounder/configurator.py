@@ -73,8 +73,9 @@ def _is_unconfigured(path: Path) -> bool:
 
 # Channels (centre frequencies) an unattended init records, unless
 # CODAR_MAX_CENTRES says otherwise.  KFS-MAIN ran 12 centres for 0.37 core
-# and 781 MB (2026-11-12); 4 is a cautious start on a busy station.
-DEFAULT_MAX_CENTRES = 4
+# and 781 MB (2026-11-12), but 4 centres plus HFDL took AB4EJ's CPU pressure
+# from 14 % to over 20 %.  Michael, 2026-11-12: start every station at 2.
+DEFAULT_MAX_CENTRES = 2
 
 
 COORDINATION_ENV = Path("/etc/sigmond/coordination.env")
