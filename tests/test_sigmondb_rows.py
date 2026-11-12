@@ -53,6 +53,7 @@ def test_a_known_delay_comes_back_on_the_utc_second(delay_ms, start_ms):
     assert abs(best["delay_ns"] - delay_ms * 1e6) < 25_000          # one range bin ~ 15.6 us
     assert best["group_key"] == sr.group_key(4_463_000.0, KAPPA)
     assert best["origin"] == "t6_anchor"
+    assert best["freq_hz"] == 4_463_000.0
     assert tuple(best) == sr.ARRIVAL_COLUMNS and tuple(cap) == sr.CAPTURE_COLUMNS
     assert cap["n_found"] == len(arrs) and cap["expected"] == {"BLCK": 1.0}
 

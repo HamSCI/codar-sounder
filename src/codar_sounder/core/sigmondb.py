@@ -112,6 +112,8 @@ def rows_for_cpi(
         arrivals.append(sr.arrival_row(
             time=second, reporter_id=reporter_id, group_key=gkey, centre_hz=float(centre_hz),
             rate_hz_per_s=kappa, delay_ns=delay_ns, level_db=float(level),
+            # A CODAR sweep spans tens of kHz, so its delay belongs to the centre.
+            freq_hz=float(centre_hz),
             margin_db=float(level), doppler_hz=doppler, clean_tag="A",
             carrier_phase_rad=phase_mid,
             s4=float(scint.s4_index) if known else None,
