@@ -66,9 +66,16 @@ def _unattended_pick(args) -> int:
     try:
         lat, lon = float(env["STATION_LAT"]), float(env["STATION_LON"])
     except (KeyError, ValueError):
-        print("codar-sounder: no STATION_LAT/STATION_LON; transmitters "
-              "not chosen — run `smd config init codar-sounder` to pick")
-        return 0
+        # No GPS fix or typed coordinates: the grid square's centre serves.
+        # A 6-character square spans about 5 x 9 km, nothing beside the
+        # hundreds of km that rank CODAR transmitters (AC1SN, 2026-11-12).
+        try:
+            from hamsci_dsp.geometry import grid_to_latlon
+            lat, lon = grid_to_latlon(env["STATION_GRID"])
+        except (KeyError, ValueError, ImportError):
+            print("codar-sounder: no STATION_LAT/STATION_LON or STATION_GRID; "
+                  "transmitters not chosen — run `smd config init codar-sounder` to pick")
+            return 0
     try:
         cap = int(env.get("CODAR_MAX_CENTRES", DEFAULT_MAX_CENTRES))
     except ValueError:

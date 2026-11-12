@@ -72,7 +72,7 @@ def test_standalone_init_still_copies_the_template(tmp_path):
     assert "DUCK" in {t["id"] for b in cfg["radiod"] for t in b["transmitter"]}
 
 
-def test_under_sigmond_without_coordinates_keeps_the_template(tmp_path, capsys):
+def test_under_sigmond_without_coordinates_or_grid_keeps_the_template(tmp_path, capsys):
     rc, cfg = _init(tmp_path, {"SIGMOND_RADIOD_COUNT": "1",
                                "SIGMOND_RADIOD_STATUS": "x-status.local"})
     assert rc == 0
@@ -104,3 +104,14 @@ def test_unattended_init_skips_sweeps_no_channel_can_hold(tmp_path):
     assert rc == 0
     assert all(1.2 * abs(t["sweep_bw_hz"]) <= 128_000
                for b in cfg["radiod"] for t in b["transmitter"])
+
+
+def test_under_sigmond_the_grid_centre_serves_without_coordinates(tmp_path):
+    # AC1SN, 2026-11-12: coordination held grid FN42HN and no lat/lon.
+    rc, cfg = _init(tmp_path, {"SIGMOND_RADIOD_COUNT": "1",
+                               "SIGMOND_RADIOD_STATUS": "AC1SN-status.local",
+                               "STATION_GRID": "FN42HN"})
+    assert rc == 0
+    assert cfg["station"]["receiver_lat"] == 42.5625
+    assert cfg["station"]["receiver_lon"] == -71.375
+    assert "DUCK" not in {t["id"] for b in cfg["radiod"] for t in b["transmitter"]}
