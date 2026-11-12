@@ -40,7 +40,73 @@ def cmd_config_init(args) -> int:
             if rv != 0:
                 return rv
         return _exec_wizard(args, "init")
-    return _legacy_config_init(args)
+    rv = _legacy_config_init(args)
+    if rv == 0:
+        rv = _unattended_pick(args)
+    return rv
+
+
+# Channels (centre frequencies) an unattended init records, unless
+# CODAR_MAX_CENTRES says otherwise.  KFS-MAIN ran 12 centres for 0.37 core
+# and 781 MB (2026-11-12); 4 is a cautious start on a busy station.
+DEFAULT_MAX_CENTRES = 4
+
+
+def _unattended_pick(args) -> int:
+    """Under sigmond, replace the template's worked example with the nearest
+    transmitters, capped at ``CODAR_MAX_CENTRES`` channels (Michael,
+    2026-11-12: codar-sounder is a core client, so bringup must leave it
+    recording).  sigmond sets ``SIGMOND_RADIOD_COUNT`` on every init it
+    drives.  Without sigmond, or without the station's coordinates and
+    radiod, the template stays for the operator to finish."""
+    env = os.environ
+    status = env.get("SIGMOND_RADIOD_STATUS", "").strip()
+    if "SIGMOND_RADIOD_COUNT" not in env or not status:
+        return 0
+    try:
+        lat, lon = float(env["STATION_LAT"]), float(env["STATION_LON"])
+    except (KeyError, ValueError):
+        print("codar-sounder: no STATION_LAT/STATION_LON; transmitters "
+              "not chosen — run `smd config init codar-sounder` to pick")
+        return 0
+    try:
+        cap = int(env.get("CODAR_MAX_CENTRES", DEFAULT_MAX_CENTRES))
+    except ValueError:
+        cap = DEFAULT_MAX_CENTRES
+    from codar_sounder.core.stations import audible_transmitters, pick_centres
+    picked = pick_centres(audible_transmitters(lat, lon), cap)
+    if not picked:
+        print("codar-sounder: no CODAR transmitter in range; template kept")
+        return 0
+    centres: dict[int, list] = {}
+    for c in picked:
+        centres.setdefault(c.center_freq_hz, []).append(c.to_tx_block())
+    target = Path(getattr(args, "config", None) or DEFAULT_CONFIG_PATH)
+    with open(target, "rb") as f:
+        cfg = tomllib.load(f)
+    station = dict(cfg.get("station") or {})
+    station.update(receiver_lat=lat, receiver_lon=lon)
+    if env.get("STATION_CALL"):
+        station["callsign"] = env["STATION_CALL"]
+    if env.get("STATION_GRID"):
+        station["grid_square"] = env["STATION_GRID"]
+    cfg["station"] = station
+    cfg["radiod"] = [{"status": status,
+                      "channel_name": f"codar-{hz // 1000}khz",
+                      "transmitter": txs}
+                     for hz, txs in sorted(centres.items())]
+    from codar_sounder.config import radiod_block_errors, radiod_blocks
+    errors = radiod_block_errors(radiod_blocks(cfg))
+    if errors:
+        for message in errors:
+            print(f"codar-sounder: unattended pick refused: {message}",
+                  file=sys.stderr)
+        return 1
+    target.write_text(_serialize_toml(cfg), encoding="utf-8")
+    print(f"codar-sounder: recording {len(picked)} transmitter(s) on "
+          f"{len(centres)} channel(s) (cap {cap}): "
+          + ", ".join(c.id for c in picked))
+    return 0
 
 
 def _legacy_config_init(args) -> int:

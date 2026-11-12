@@ -244,3 +244,23 @@ def station_to_tx_block(abbr: str, station: dict) -> dict:
         "tx_lat_deg": float(station["tx_lat_deg"]),
         "tx_lon_deg": float(station["tx_lon_deg"]),
     }
+
+
+def pick_centres(
+    candidates: list[TransmitterCandidate], max_centres: int,
+) -> list[TransmitterCandidate]:
+    """The candidates on the first ``max_centres`` centre frequencies,
+    taking centres in order of their nearest site.
+
+    One ``[[radiod]]`` block opens one channel at one centre and hears every
+    site on it, so the cap counts channels: the station's load budget.
+    ``candidates`` must be nearest-first, as ``audible_transmitters`` returns
+    them.  Every candidate on a chosen centre comes along."""
+    chosen: list[int] = []
+    for c in candidates:
+        if len(chosen) >= max_centres:
+            break
+        if c.center_freq_hz not in chosen:
+            chosen.append(c.center_freq_hz)
+    keep = set(chosen)
+    return [c for c in candidates if c.center_freq_hz in keep]
