@@ -264,3 +264,20 @@ def pick_centres(
             chosen.append(c.center_freq_hz)
     keep = set(chosen)
     return [c for c in candidates if c.center_freq_hz in keep]
+
+
+# The rates the template names: each lands on ka9q-radio's integer
+# samples-per-block grid at the default 20 ms block.
+SAMPLE_RATES_HZ = (64_000, 96_000, 128_000)
+
+
+def sample_rate_for(sweep_bws_hz) -> int:
+    """The smallest allowed sample rate holding the widest sweep with 20 %
+    margin; the largest when nothing fits.  Complex sampling gives a channel
+    as much bandwidth as its rate, so a 99 kHz sweep (most 13.5 MHz radars,
+    Troyer et al. 2025 Table 1) needs 128 kHz, not the 64 kHz default."""
+    widest = max((abs(float(b)) for b in sweep_bws_hz), default=0.0)
+    for rate in SAMPLE_RATES_HZ:
+        if rate >= 1.2 * widest:
+            return rate
+    return SAMPLE_RATES_HZ[-1]

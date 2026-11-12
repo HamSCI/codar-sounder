@@ -119,3 +119,44 @@ def test_only_the_first_transmitter_of_each_sweep_group_writes_rows(tmp_path):
     hooks["DUCK"]("result", "start")
     assert em.calls[0]["expected"] == ["DUCK", "HATY"]
     assert em.calls[0]["centre_hz"] == 4_537_180.0 and em.calls[0]["period_s"] == 1.0
+
+
+def _rows(tmp_path=None, delay_ms=1.2, srf=SRF, store=None):
+    rx = _signal(delay_ms / 1000, n_sweeps=32)   # scintillation wants >= its minimum
+    res = dechirp(rx, sample_rate_hz=FS, sweep_rate_hz_per_s=KAPPA, sweep_repetition_hz=srf)
+    return sdb.rows_for_cpi(
+        result=res, cpi_start_utc=datetime(2026, 11, 12, 12, 0, 7, tzinfo=timezone.utc),
+        tdma_offset_samples=0, centre_hz=4_463_000.0, period_s=1.0 / srf,
+        reporter_id="", t_level="T6", expected=[], detector_version="t", duration_s=32.0,
+        phase_store=store)
+
+
+def test_arrivals_carry_scintillation_phase_and_the_sweep_rate():
+    cap, arrs = _rows()
+    best = max(arrs, key=lambda a: a["level_db"])
+    assert best["s4"] is not None and best["sigma_phi_rad"] is not None
+    assert best["carrier_phase_rad"] is not None and -np.pi <= best["carrier_phase_rad"] <= np.pi
+    assert best["engineering"]["sweep_repetition_hz"] == "1"
+    assert best["engineering"]["phase_coherent"] == "1"       # a clean synthetic chirp
+    assert cap["engineering"]["sweep_repetition_hz"] == "1"
+
+
+def test_phase_series_stay_on_the_station_and_the_capture_points_at_them(tmp_path):
+    import json
+    store = sdb.PhaseStore(tmp_path, keep_days=7)
+    cap, arrs = _rows(store=store)
+    files = list(tmp_path.rglob("*.jsonl"))
+    assert len(files) == 1 and cap["ring_ref"] == str(files[0].relative_to(tmp_path))
+    rec = [json.loads(l) for l in files[0].read_text().splitlines()]
+    assert len(rec) == len(arrs)
+    assert len(rec[0]["phase_rad"]) == 32 and len(rec[0]["amp_db"]) == 32  # one per sweep
+    assert rec[0]["delay_ns"] in {a["delay_ns"] for a in arrs}
+
+
+def test_the_phase_store_prunes_days_past_its_keep(tmp_path):
+    store = sdb.PhaseStore(tmp_path, radiod="r", keep_days=2)
+    old = tmp_path / "r" / "phase" / "g" / "2026-11-01.jsonl"
+    old.parent.mkdir(parents=True)
+    old.write_text("{}\n")
+    store.prune(today=datetime(2026, 11, 12, tzinfo=timezone.utc).date())
+    assert not old.exists()

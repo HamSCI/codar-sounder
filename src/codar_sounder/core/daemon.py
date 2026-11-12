@@ -444,7 +444,7 @@ def _make_sink_writer():
 _OWN_WRITER = object()
 
 
-def _make_sigmondb_emitter(reporter_id):
+def _make_sigmondb_emitter(reporter_id, config=None):
     """The sigmondb row emitter on the local sink (core/sigmondb.py).
 
     The rows leave reporter_id empty on purpose: sigmondb's ingest files an
@@ -460,8 +460,14 @@ def _make_sigmondb_emitter(reporter_id):
         # hamsci-dsp older than its sigmondb_rows module: keep the physics.
         log.warning("sigmondb rows off (%s); update hamsci-dsp", exc)
         return None
+    cfg = config or {}
+    store = sigmondb.PhaseStore(
+        cfg.get("paths", {}).get("output_dir", "/var/lib/codar-sounder"),
+        keep_days=int(cfg.get("processing", {}).get("phase_series_days",
+                                                    sigmondb.PHASE_KEEP_DAYS)))
     return sigmondb.Emitter(sigmondb.make_writers(), reporter_id="",
-                            detector_version=f"codar-sounder/{__version__}")
+                            detector_version=f"codar-sounder/{__version__}",
+                            phase_store=store)
 
 
 class SounderDaemon:
@@ -572,7 +578,7 @@ class SounderDaemon:
         # sigmondb rows (core/sigmondb.py): shared like the sink writer.
         self._owns_emitter = sigmondb_emitter is _OWN_WRITER
         self.sigmondb = (
-            _make_sigmondb_emitter(self.reporter_id)
+            _make_sigmondb_emitter(self.reporter_id, config)
             if self._owns_emitter else sigmondb_emitter
         )
 
@@ -847,7 +853,7 @@ class MultiBlockDaemon:
         self.stale_after_s = 3.0 * coherent_seconds
 
         self.ch_writer = _make_sink_writer()
-        self.sigmondb = _make_sigmondb_emitter(reporter_id)
+        self.sigmondb = _make_sigmondb_emitter(reporter_id, config)
         self.blocks: list[_Block] = []
         for block in radiod_blocks:
             if not transmitters(block):

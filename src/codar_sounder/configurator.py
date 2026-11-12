@@ -73,8 +73,13 @@ def _unattended_pick(args) -> int:
         cap = int(env.get("CODAR_MAX_CENTRES", DEFAULT_MAX_CENTRES))
     except ValueError:
         cap = DEFAULT_MAX_CENTRES
-    from codar_sounder.core.stations import audible_transmitters, pick_centres
-    picked = pick_centres(audible_transmitters(lat, lon), cap)
+    from codar_sounder.core.stations import (
+        SAMPLE_RATES_HZ, audible_transmitters, pick_centres)
+    # A channel holds at most the largest rate's bandwidth; a wider sweep
+    # (24-25 MHz and 42 MHz radars sweep 200-750 kHz) would be cut off.
+    fits = [c for c in audible_transmitters(lat, lon)
+            if 1.2 * abs(c.sweep_bw_hz) <= SAMPLE_RATES_HZ[-1]]
+    picked = pick_centres(fits, cap)
     if not picked:
         print("codar-sounder: no CODAR transmitter in range; template kept")
         return 0
@@ -91,6 +96,11 @@ def _unattended_pick(args) -> int:
     if env.get("STATION_GRID"):
         station["grid_square"] = env["STATION_GRID"]
     cfg["station"] = station
+    # One rate serves every block; it must hold the widest chosen sweep.
+    from codar_sounder.core.stations import sample_rate_for
+    processing = dict(cfg.get("processing") or {})
+    processing["sample_rate_hz"] = sample_rate_for(c.sweep_bw_hz for c in picked)
+    cfg["processing"] = processing
     cfg["radiod"] = [{"status": status,
                       "channel_name": f"codar-{hz // 1000}khz",
                       "transmitter": txs}

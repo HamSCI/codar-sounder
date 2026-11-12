@@ -77,3 +77,30 @@ def test_under_sigmond_without_coordinates_keeps_the_template(tmp_path, capsys):
                                "SIGMOND_RADIOD_STATUS": "x-status.local"})
     assert rc == 0
     assert "DUCK" in {t["id"] for b in cfg["radiod"] for t in b["transmitter"]}
+
+
+def test_sample_rate_holds_the_widest_sweep():
+    from codar_sounder.core.stations import sample_rate_for
+    assert sample_rate_for([25_734]) == 64_000
+    assert sample_rate_for([25_734, 49_630]) == 64_000
+    assert sample_rate_for([25_734, 99_259]) == 128_000
+    assert sample_rate_for([]) == 64_000
+
+
+def test_unattended_init_sets_the_sample_rate_for_what_it_picked(tmp_path):
+    from codar_sounder.core.stations import sample_rate_for
+    rc, cfg = _init(tmp_path, {
+        "SIGMOND_RADIOD_COUNT": "1", "SIGMOND_RADIOD_STATUS": "kfs-omni-status.local",
+        "STATION_LAT": str(KFS[0]), "STATION_LON": str(KFS[1]), "CODAR_MAX_CENTRES": "6"})
+    assert rc == 0
+    bws = [t["sweep_bw_hz"] for b in cfg["radiod"] for t in b["transmitter"]]
+    assert cfg["processing"]["sample_rate_hz"] == sample_rate_for(bws)
+
+
+def test_unattended_init_skips_sweeps_no_channel_can_hold(tmp_path):
+    rc, cfg = _init(tmp_path, {
+        "SIGMOND_RADIOD_COUNT": "1", "SIGMOND_RADIOD_STATUS": "kfs-omni-status.local",
+        "STATION_LAT": str(KFS[0]), "STATION_LON": str(KFS[1]), "CODAR_MAX_CENTRES": "40"})
+    assert rc == 0
+    assert all(1.2 * abs(t["sweep_bw_hz"]) <= 128_000
+               for b in cfg["radiod"] for t in b["transmitter"])
