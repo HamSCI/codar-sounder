@@ -66,6 +66,17 @@ where sigmond's local sink (an SQLite store-and-forward database)
 is enabled, every record is also written to the `codar.spots`
 table — additive, with no contract change.
 
+Under sigmond, the daemon also writes sigmondb arrival and capture
+rows, one capture row per CPI and up to eight arrivals per sweep
+group.  hs-uploader ships them in their own tars, through the
+wsprdaemon.org gateways, to sigmondb (pipelines
+`codar-sigmondb-arrival` and `codar-sigmondb-capture` in
+`deploy.toml`).  These rows need hamsci-dsp 0.9.0 or later; an
+older hamsci-dsp turns them off and keeps the JSONL.  The
+per-sweep phase and amplitude series stay on the station, under
+`<output_dir>/<radiod>/phase/`, for `processing.phase_series_days`
+days (default 7).
+
 ## How it works
 
 ```
@@ -111,12 +122,12 @@ parameters.  Revisit when the second antenna is installed.
 
 ## Choosing which transmitters to record
 
-There are ~60 known CODAR sites; a given receiver hears only some of
-them, and which ones depends on your location and the ionosphere.  You
+The site database lists 139 CODAR sites; a given receiver hears only
+some of them, and which ones depends on your location and the ionosphere.  You
 don't hand-write transmitter blocks — use the picker:
 
 ```
-sudo smd config init codar-sounder        # whiptail multi-select picker
+smd config init codar-sounder        # whiptail multi-select picker
 ```
 
 It lists the known sites ranked by distance from your receiver
@@ -132,6 +143,23 @@ codar-sounder stations --receiver-lat <lat> --receiver-lon <lon> --json   # for 
 The site database (`data/codar-stations.toml`) is canonical: the picker
 generates the MHz→Hz frequency and sweep parameters from it, so a
 hand-typed transcription error can't slip into the config.
+`scripts/rebuild-catalogue.py` regenerates it from HFRNet's live
+station list (CODAR SeaSondes heard within 90 days); the current file
+dates from the 2026-11-08 list.  Regenerate it rather than edit it.
+
+### Unattended init under sigmond
+
+`smd bringup` runs `config init --non-interactive`.  Under sigmond,
+that init picks the transmitters nearest the station, grouped by
+centre frequency, and stops at 2 channels.  Set `CODAR_MAX_CENTRES`
+to record more.  Without a latitude and longitude it ranks from the
+centre of the station's grid square.  It writes one block per radiod
+that sigmond binds, and sets `processing.sample_rate_hz` (64, 96 or
+128 kHz) to hold the widest chosen sweep.
+
+The unattended init writes only a new file, the installer's untouched
+template, or a file you name with `--reconfig`.  A config that names a
+real radiod stays as it stands.
 
 ### How the config maps onto radiod channels
 
@@ -139,8 +167,9 @@ Each `[[radiod]]` block opens one radiod IQ channel (64 kHz wide by
 default) tuned to its transmitters' shared centre frequency.  Sites in
 one band can sit far apart: 4.550 MHz and 4.785 MHz lie 235 kHz apart,
 so one channel cannot hear both.  The picker therefore writes one block
-per distinct centre, named `codar-<kHz>khz` (e.g. `codar-4785khz`), and
-lists every site on that centre under it.
+per centre, named `codar-<kHz>khz` (e.g. `codar-4785khz`), and lists
+every site on that centre under it.  Centres within 2 kHz of each
+other share one block.
 
 All the blocks for one radiod carry the same `status`, and one daemon
 instance (`codar-sounder@<radiod-id>`) records every one of them, each
@@ -158,14 +187,20 @@ block at a time; pick it with `--channel-name` (default: the first).
 
 ## Install
 
-Pattern A (sigmond-managed):
+Pattern A (sigmond-managed).  codar-sounder belongs to the dasi2
+profile's core clients, so `smd bringup dasi2` installs and configures
+it.  To add it by hand:
 
 ```
-sudo smd component install codar-sounder
-sudo smd apply        # writes the [[radiod.fragment]] channel into radiod
-sudo smd config init codar-sounder    # pick transmitters (see above)
-sudo systemctl start codar-sounder@<radiod-id>
+smd component install codar-sounder
+smd apply        # writes the [[radiod.fragment]] channel into radiod
+smd config init codar-sounder    # pick transmitters (see above)
+smd start codar-sounder
 ```
+
+`smd start` starts one `codar-sounder@<radiod>` instance for each
+radiod the config's `[[radiod]]` blocks name.  Never run `smd` under
+sudo; it raises itself to root when a verb needs it.
 
 Standalone (without sigmond):
 
