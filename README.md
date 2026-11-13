@@ -149,7 +149,9 @@ dates from the 2026-11-08 list.  Regenerate it rather than edit it.
 
 ### Unattended init under sigmond
 
-`smd bringup` runs `config init --non-interactive`.  Under sigmond,
+`smd bringup` runs `config init --non-interactive`, on a `client` host
+as on a `dasi2` host: the client's own init writes the `[[radiod]]`
+blocks.  Under sigmond,
 that init picks the transmitters nearest the station, grouped by
 centre frequency, and stops at 2 channels.  Set `CODAR_MAX_CENTRES`
 to record more.  Without a latitude and longitude it ranks from the
@@ -187,9 +189,9 @@ block at a time; pick it with `--channel-name` (default: the first).
 
 ## Install
 
-Pattern A (sigmond-managed).  codar-sounder belongs to the dasi2
-profile's core clients, so `smd bringup dasi2` installs and configures
-it.  To add it by hand:
+Pattern A (sigmond-managed).  codar-sounder belongs to the `dasi2` and
+`client` profiles, so `smd bringup dasi2` (or `client`) installs and
+configures it.  To add it by hand:
 
 ```
 smd component install codar-sounder
