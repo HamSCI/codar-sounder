@@ -37,7 +37,7 @@ log_dir      = "/var/log/codar-sounder"
 # placeholder unchanged to make the daemon refuse to start until
 # the operator runs the configurator.
 status = "<configure-via-config-init>"
-channel_name = "codar-4537khz"
+channel_name = "codar-4463khz"
 
 # One [[radiod.transmitter]] per CODAR transmitter on this block's centre
 # frequency.  Every transmitter in a block must sit within ±2 kHz of it
@@ -51,24 +51,24 @@ channel_name = "codar-4537khz"
 #   codar-sounder stations --receiver-lat <lat> --receiver-lon <lon>
 # The picker generates these blocks from data/codar-stations.toml, so the
 # MHz→Hz and sweep-rate units are always correct.  The values below are a
-# worked example (DUCK + HATY, both 4.537 MHz, one shared channel).
+# worked example (LISL + CEDR, ODU in Virginia, both 4.463 MHz, one shared channel).
 [[radiod.transmitter]]
-id                  = "DUCK"
-center_freq_hz      = 4537180
+id                  = "LISL"
+center_freq_hz      = 4463000
 sweep_rate_hz_per_s = -25733.913
 sweep_bw_hz         = 25734
 sweep_repetition_hz = 1
-tx_lat_deg          = 36.180350
-tx_lon_deg          = -75.750133
+tx_lat_deg          = 36.691717
+tx_lon_deg          = -75.922633
 
 # [[radiod.transmitter]]
-# id                  = "HATY"
-# center_freq_hz      = 4537180
+# id                  = "CEDR"
+# center_freq_hz      = 4463000
 # sweep_rate_hz_per_s = -25733.913
 # sweep_bw_hz         = 25734
 # sweep_repetition_hz = 1
-# tx_lat_deg          = 35.257217
-# tx_lon_deg          = -75.519883
+# tx_lat_deg          = 37.673300
+# tx_lon_deg          = -75.593033
 
 # Another centre on the same radiod gets its own block, same status:
 #
@@ -83,7 +83,7 @@ tx_lon_deg          = -75.750133
 #
 # [[radiod]]
 # status       = "bee3-status.local"
-# channel_name = "codar-4537khz"
+# channel_name = "codar-4463khz"
 # [[radiod.transmitter]]
 # id           = "MVCO"
 # ...

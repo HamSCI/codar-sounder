@@ -51,10 +51,12 @@ from hamsci_dsp.geometry import bearing_deg, great_circle_km
 
 BANDS: list[tuple[float, float, str]] = [
     (4.0, 5.2, "4–5 MHz (long-range)"),
+    (5.2, 5.5, "5 MHz (long-range)"),
     (11.0, 12.9, "12 MHz (mid-range)"),
     (13.0, 14.0, "13 MHz (mid-range)"),
+    (16.0, 16.5, "16 MHz (mid-range)"),
     (23.0, 27.0, "24–26 MHz (short-range)"),
-    (40.0, 41.0, "40 MHz (very-short-range)"),
+    (40.0, 44.0, "40–44 MHz (very-short-range)"),
 ]
 
 # Prime one-hop sky-wave window (km).  Sites inside it are the strongest,

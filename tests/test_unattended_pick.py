@@ -63,7 +63,7 @@ def test_under_sigmond_init_writes_capped_blocks_for_the_bound_radiod(tmp_path):
     blocks = cfg["radiod"]
     assert len(blocks) == 2
     assert {b["status"] for b in blocks} == {"kfs-omni-status.local"}
-    assert "DUCK" not in {t["id"] for b in blocks for t in b["transmitter"]}  # template example gone
+    assert "LISL" not in {t["id"] for b in blocks for t in b["transmitter"]}  # template example gone
     assert cfg["station"]["receiver_lat"] == KFS[0]
 
 
@@ -79,14 +79,14 @@ def test_without_a_cap_init_records_two_centres(tmp_path):
 def test_standalone_init_still_copies_the_template(tmp_path):
     rc, cfg = _init(tmp_path, {"STATION_LAT": str(KFS[0]), "STATION_LON": str(KFS[1])})
     assert rc == 0
-    assert "DUCK" in {t["id"] for b in cfg["radiod"] for t in b["transmitter"]}
+    assert "LISL" in {t["id"] for b in cfg["radiod"] for t in b["transmitter"]}
 
 
 def test_under_sigmond_without_coordinates_or_grid_keeps_the_template(tmp_path, capsys):
     rc, cfg = _init(tmp_path, {"SIGMOND_RADIOD_COUNT": "1",
                                "SIGMOND_RADIOD_STATUS": "x-status.local"})
     assert rc == 0
-    assert "DUCK" in {t["id"] for b in cfg["radiod"] for t in b["transmitter"]}
+    assert "LISL" in {t["id"] for b in cfg["radiod"] for t in b["transmitter"]}
 
 
 def test_sample_rate_holds_the_widest_sweep():
@@ -124,7 +124,7 @@ def test_under_sigmond_the_grid_centre_serves_without_coordinates(tmp_path):
     assert rc == 0
     assert cfg["station"]["receiver_lat"] == 42.5625
     assert cfg["station"]["receiver_lon"] == -71.375
-    assert "DUCK" not in {t["id"] for b in cfg["radiod"] for t in b["transmitter"]}
+    assert "LISL" not in {t["id"] for b in cfg["radiod"] for t in b["transmitter"]}
 
 
 def test_two_radiods_get_the_same_channels_each(tmp_path):

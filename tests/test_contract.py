@@ -214,10 +214,12 @@ class TestStationTable:
         assert len(self.data["stations"]) >= 50, \
             f"expected >=50 stations, got {len(self.data['stations'])}"
 
-    def test_DUCK_matches_kaeppler_paper(self):
-        """The DUCK transmitter's parameters should match Kaeppler 2022."""
-        d = self.data["stations"]["DUCK"]
-        assert d["freq_mhz"] == 4.53718
+    def test_long_range_sweep_matches_kaeppler_paper(self):
+        """Kaeppler 2022's DUCK swept 25.734 kHz down once a second at 4.537 MHz.  DUCK has left
+        HFRNet's list and the East Coast long-range group now sits at 4.463 MHz (catalogue rebuilt
+        2026-11-13), but its sweep keeps the paper's shape."""
+        d = self.data["stations"]["LISL"]
+        assert d["freq_mhz"] == 4.463
         assert d["sweep_rate_hz_per_s"] == -25733.913
         assert d["sweep_bw_hz"] == 25734
         assert d["sweep_repetition_hz"] == 1

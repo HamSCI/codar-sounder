@@ -144,6 +144,18 @@ def _unattended_pick(args) -> int:
     centres: dict[int, list] = {}
     for c in picked:
         centres.setdefault(c.center_freq_hz, []).append(c.to_tx_block())
+    # Sites a few hundred Hz apart (PSLR 4.4750, PILR/PMGC 4.4755 MHz) share one channel: a block
+    # holds every site within CENTER_TOLERANCE_HZ of its centre, and two blocks would both be
+    # named codar-4475khz.  Merge each centre into the previous block when it lies that close.
+    from codar_sounder.config import CENTER_TOLERANCE_HZ
+    merged: dict[int, list] = {}
+    for hz in sorted(centres):
+        near = [m for m in merged if abs(hz - m) <= CENTER_TOLERANCE_HZ]
+        if near:
+            merged[near[0]].extend(centres[hz])
+        else:
+            merged[hz] = list(centres[hz])
+    centres = merged
     target = Path(getattr(args, "config", None) or DEFAULT_CONFIG_PATH)
     with open(target, "rb") as f:
         cfg = tomllib.load(f)

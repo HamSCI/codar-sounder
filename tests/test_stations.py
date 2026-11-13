@@ -51,10 +51,10 @@ _RX = (38.92, -92.29)
 
 def test_load_stations_real_db():
     st = load_stations()
-    assert len(st) > 40                      # ~60 sites vendored
-    duck = st["DUCK"]
-    assert duck["freq_mhz"] == pytest.approx(4.53718)
-    assert duck["sweep_rate_hz_per_s"] == pytest.approx(-25733.913)
+    assert len(st) > 100                     # 139 live sites, HFRNet list of 2026-11-08
+    lisl = st["LISL"]
+    assert lisl["freq_mhz"] == pytest.approx(4.463)
+    assert lisl["sweep_rate_hz_per_s"] == pytest.approx(-25733.913)
 
 
 def test_audible_sorted_nearest_first():
@@ -114,7 +114,7 @@ def test_band_label_bins():
     assert band_label(4.537) == "4–5 MHz (long-range)"
     assert band_label(13.45) == "13 MHz (mid-range)"
     assert band_label(25.4) == "24–26 MHz (short-range)"
-    assert band_label(40.75) == "40 MHz (very-short-range)"
+    assert band_label(40.75) == "40–44 MHz (very-short-range)"
     # Outside every bin → Hz-rounded fallback, never a crash.
     assert band_label(7.0).endswith("MHz")
 

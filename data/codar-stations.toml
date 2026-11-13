@@ -1,307 +1,89 @@
-# Known CODAR transmitter sites — `codar-sounder config init` reads this
-# file to offer an operator picker keyed on (receiver_lat, receiver_lon)
-# great-circle distance, and to populate [[radiod.transmitter]] defaults.
+# Known CODAR transmitter sites: `codar-sounder config init` reads this file to offer
+# an operator picker keyed on (receiver_lat, receiver_lon) great-circle distance, and to
+# populate [[radiod.transmitter]] defaults.
 #
-# Source: HFRNet station table (CODAR_WERA.pdf, 2014 snapshot).  Only
-# CODAR (FMCW) stations are listed — WERA stations use a different
-# waveform that codar-sounder's dechirper does not handle.
+# Source: HFRNet national station list, last radial file 2026-11-08
+# (https://hfradar.ioos.us/hfrnet/sitediag/stationList.php?output=CSV), rebuilt by
+# scripts/rebuild-catalogue.py: CODAR SeaSondes heard within 90 days of that date.
+# Regenerate rather than edit.  WERA stations use a waveform the dechirper does not handle.
 #
 # Per-station fields:
-#   freq_mhz              — radiated centre frequency (MHz)
-#   sweep_rate_hz_per_s   — chirp slope, signed (negative = down-chirp)
-#   sweep_bw_hz           — usable sweep bandwidth (Hz)
-#   sweep_repetition_hz   — sweep repetition frequency (Hz, "PRR" in CODAR docs)
-#   tx_lat_deg, tx_lon_deg — antenna location (WGS84)
-#   association            — operating institution (informational)
+#   freq_mhz              radiated centre frequency (MHz)
+#   sweep_rate_hz_per_s   chirp slope, signed (negative = down-chirp)
+#   sweep_bw_hz           sweep bandwidth (Hz)
+#   sweep_repetition_hz   sweeps per second
+#   tx_lat_deg, tx_lon_deg  antenna location (WGS84)
+#   association           operating network (informational)
 
 # ---------------------------------------------------------------------------
-# US East Coast — 4.5 MHz band (long-range)
+# 4-5 MHz (long-range)
 # ---------------------------------------------------------------------------
 
-[stations.BLCK]
-freq_mhz            = 4.513
+[stations.AGL1]
+freq_mhz            = 4.45050
 sweep_rate_hz_per_s = -25733.913
 sweep_bw_hz         = 25734
 sweep_repetition_hz = 1
-tx_lat_deg          = 41.152733
-tx_lon_deg          = -71.551000
-association         = "Rutgers"
+tx_lat_deg          = 34.576883
+tx_lon_deg          = -120.649083
+association         = "SLO"
 
-[stations.BRIG]
-freq_mhz            = 4.513
+[stations.ANWR]
+freq_mhz            = 4.45050
 sweep_rate_hz_per_s = -25733.913
 sweep_bw_hz         = 25734
 sweep_repetition_hz = 1
-tx_lat_deg          = 39.407450
-tx_lon_deg          = -74.362117
-association         = "Rutgers"
+tx_lat_deg          = 28.111417
+tx_lon_deg          = -96.793500
+association         = "TexAM"
 
-[stations.HOOK]
-freq_mhz            = 4.513
+[stations.DCLR]
+freq_mhz            = 4.45050
 sweep_rate_hz_per_s = -25733.913
 sweep_bw_hz         = 25734
 sweep_repetition_hz = 1
-tx_lat_deg          = 40.432800
-tx_lon_deg          = -73.983900
-association         = "Rutgers"
-
-[stations.LOVE]
-freq_mhz            = 4.513
-sweep_rate_hz_per_s = -25733.913
-sweep_bw_hz         = 25734
-sweep_repetition_hz = 1
-tx_lat_deg          = 39.736217
-tx_lon_deg          = -74.117050
-association         = "Rutgers"
-
-[stations.MRCH]
-freq_mhz            = 4.513
-sweep_rate_hz_per_s = -25733.913
-sweep_bw_hz         = 25734
-sweep_repetition_hz = 1
-tx_lat_deg          = 40.788200
-tx_lon_deg          = -72.745300
-association         = "Rutgers"
-
-[stations.MVCO]
-freq_mhz            = 4.513
-sweep_rate_hz_per_s = -25733.913
-sweep_bw_hz         = 25734
-sweep_repetition_hz = 1
-tx_lat_deg          = 41.349817
-tx_lon_deg          = -70.526833
-association         = "Rutgers"
-
-[stations.NANT]
-freq_mhz            = 4.513
-sweep_rate_hz_per_s = -25733.913
-sweep_bw_hz         = 25734
-sweep_repetition_hz = 1
-tx_lat_deg          = 41.249767
-tx_lon_deg          = -69.971883
-association         = "Rutgers"
-
-[stations.WILD]
-freq_mhz            = 4.513
-sweep_rate_hz_per_s = -25733.913
-sweep_bw_hz         = 25734
-sweep_repetition_hz = 1
-tx_lat_deg          = 38.942167
-tx_lon_deg          = -74.886133
-association         = "Rutgers"
-
-[stations.DUCK]
-freq_mhz            = 4.53718
-sweep_rate_hz_per_s = -25733.913
-sweep_bw_hz         = 25734
-sweep_repetition_hz = 1
-tx_lat_deg          = 36.180350
-tx_lon_deg          = -75.750133
-association         = "UNC"
-
-[stations.HATY]
-freq_mhz            = 4.53718
-sweep_rate_hz_per_s = -25733.913
-sweep_bw_hz         = 25734
-sweep_repetition_hz = 1
-tx_lat_deg          = 35.257217
-tx_lon_deg          = -75.519883
-association         = "UNC"
+tx_lat_deg          = 35.217483
+tx_lon_deg          = -120.862633
+association         = "SLO"
 
 [stations.HBSP]
-freq_mhz            = 4.54296
-sweep_rate_hz_per_s = -18381.367
-sweep_bw_hz         = 18381
+freq_mhz            = 4.45050
+sweep_rate_hz_per_s = -25733.913
+sweep_bw_hz         = 25734
 sweep_repetition_hz = 1
-tx_lat_deg          = 30.383033
-tx_lon_deg          = -86.432700
+tx_lat_deg          = 30.383217
+tx_lon_deg          = -86.433817
 association         = "USM"
 
-[stations.PILR]
-freq_mhz            = 4.550
-sweep_rate_hz_per_s = -25634.758
-sweep_bw_hz         = 25635
-sweep_repetition_hz = 1
-tx_lat_deg          = 37.496750
-tx_lon_deg          = -122.499367
-association         = "SFSU"
-
-[stations.ASSA]
-freq_mhz            = 4.575
+[stations.MBNP]
+freq_mhz            = 4.45050
 sweep_rate_hz_per_s = -25733.913
 sweep_bw_hz         = 25734
 sweep_repetition_hz = 1
-tx_lat_deg          = 38.205017
-tx_lon_deg          = -75.152900
-association         = "ODU"
-
-[stations.CEDR]
-freq_mhz            = 4.575
-sweep_rate_hz_per_s = -25733.913
-sweep_bw_hz         = 25734
-sweep_repetition_hz = 1
-tx_lat_deg          = 37.672917
-tx_lon_deg          = -75.592267
-association         = "ODU"
-
-[stations.LISL]
-freq_mhz            = 4.575
-sweep_rate_hz_per_s = -25733.913
-sweep_bw_hz         = 25734
-sweep_repetition_hz = 1
-tx_lat_deg          = 36.691717
-tx_lon_deg          = -75.922633
-association         = "ODU"
+tx_lat_deg          = 28.604383
+tx_lon_deg          = -95.961283
+association         = "TexAM"
 
 [stations.OBSP]
-freq_mhz            = 4.660
-sweep_rate_hz_per_s = -18381.367
-sweep_bw_hz         = 18381
+freq_mhz            = 4.45050
+sweep_rate_hz_per_s = -25733.913
+sweep_bw_hz         = 25734
 sweep_repetition_hz = 1
-tx_lat_deg          = 30.249583
-tx_lon_deg          = -87.668267
+tx_lat_deg          = 30.249433
+tx_lon_deg          = -87.668450
 association         = "USM"
 
-[stations.NAPL]
-freq_mhz            = 4.900
+[stations.PINS]
+freq_mhz            = 4.45050
 sweep_rate_hz_per_s = -25733.913
 sweep_bw_hz         = 25734
 sweep_repetition_hz = 1
-tx_lat_deg          = 26.162150
-tx_lon_deg          = -81.810533
-association         = "USF"
-
-[stations.RDSR]
-freq_mhz            = 4.900
-sweep_rate_hz_per_s = -25733.913
-sweep_bw_hz         = 25734
-sweep_repetition_hz = 1
-tx_lat_deg          = 27.832533
-tx_lon_deg          = -82.834383
-association         = "USF"
-
-[stations.VENI]
-freq_mhz            = 4.900
-sweep_rate_hz_per_s = -25733.913
-sweep_bw_hz         = 25734
-sweep_repetition_hz = 1
-tx_lat_deg          = 27.077583
-tx_lon_deg          = -82.451600
-association         = "USF"
-
-# ---------------------------------------------------------------------------
-# US East Coast — 13.45 MHz band (mid-range)
-# ---------------------------------------------------------------------------
-
-[stations.SEAB]
-freq_mhz            = 13.450
-sweep_rate_hz_per_s = -49629.688
-sweep_bw_hz         = 49630
-sweep_repetition_hz = 1
-tx_lat_deg          = 40.362633
-tx_lon_deg          = -73.972400
-association         = "Rutgers"
-
-[stations.SPRK]
-freq_mhz            = 13.450
-sweep_rate_hz_per_s = -49629.688
-sweep_bw_hz         = 49630
-sweep_repetition_hz = 1
-tx_lat_deg          = 39.935183
-tx_lon_deg          = -74.072017
-association         = "Rutgers"
-
-[stations.CDDO]
-freq_mhz            = 13.450
-sweep_rate_hz_per_s = -49629.688
-sweep_bw_hz         = 49630
-sweep_repetition_hz = 1
-tx_lat_deg          = 18.099767
-tx_lon_deg          = -67.190700
-association         = "UPR"
-
-[stations.FURA]
-freq_mhz            = 13.450
-sweep_rate_hz_per_s = -49629.688
-sweep_bw_hz         = 49630
-sweep_repetition_hz = 1
-tx_lat_deg          = 18.291667
-tx_lon_deg          = -67.198600
-association         = "UPR"
-
-# ---------------------------------------------------------------------------
-# US East Coast — 25 MHz band (short-range, ~1 km cells)
-# ---------------------------------------------------------------------------
-
-[stations.BISL]
-freq_mhz            = 25.360
-sweep_rate_hz_per_s = -69580.093
-sweep_bw_hz         = 139160
-sweep_repetition_hz = 0.5
-tx_lat_deg          = 41.152583
-tx_lon_deg          = -71.551833
-association         = "URI"
-
-[stations.MISQ]
-freq_mhz            = 25.440
-sweep_rate_hz_per_s = -69580.078
-sweep_bw_hz         = 139160
-sweep_repetition_hz = 0.5
-tx_lat_deg          = 41.322933
-tx_lon_deg          = -71.804217
-association         = "URI"
-
-[stations.GCAP]
-freq_mhz            = 25.300
-sweep_rate_hz_per_s = -150146.484
-sweep_bw_hz         = 300293
-sweep_repetition_hz = 0.5
-tx_lat_deg          = 40.982550
-tx_lon_deg          = -73.623783
-association         = "UConn"
-
-[stations.STLI]
-freq_mhz            = 26.190
-sweep_rate_hz_per_s = -150146.484
-sweep_bw_hz         = 300293
-sweep_repetition_hz = 0.5
-tx_lat_deg          = 40.908750
-tx_lon_deg          = -73.587283
-association         = "UConn"
-
-[stations.VIEW]
-freq_mhz            = 25.400
-sweep_rate_hz_per_s = -101097.519
-sweep_bw_hz         = 202195
-sweep_repetition_hz = 0.5
-tx_lat_deg          = 36.949933
-tx_lon_deg          = -76.243183
-association         = "ODU"
-
-[stations.SUNS]
-freq_mhz            = 25.600
-sweep_rate_hz_per_s = -101097.519
-sweep_bw_hz         = 202195
-sweep_repetition_hz = 0.5
-tx_lat_deg          = 37.137833
-tx_lon_deg          = -75.972200
-association         = "ODU"
-
-[stations.CPHN]
-freq_mhz            = 25.600
-sweep_rate_hz_per_s = -100708.031
-sweep_bw_hz         = 201416
-sweep_repetition_hz = 0.5
-tx_lat_deg          = 36.930850
-tx_lon_deg          = -76.016750
-association         = "NIOT"
-
-# ---------------------------------------------------------------------------
-# US West Coast — 4.5 MHz band
-# ---------------------------------------------------------------------------
+tx_lat_deg          = 27.422550
+tx_lon_deg          = -97.299517
+association         = "TexAM"
 
 [stations.RAGG]
-freq_mhz            = 4.54995
+freq_mhz            = 4.45050
 sweep_rate_hz_per_s = -25733.913
 sweep_bw_hz         = 25734
 sweep_repetition_hz = 1
@@ -309,17 +91,314 @@ tx_lat_deg          = 35.787367
 tx_lon_deg          = -121.336250
 association         = "SLO"
 
-[stations.BMLR]
-freq_mhz            = 4.78495
+[stations.SGRV]
+freq_mhz            = 4.45050
 sweep_rate_hz_per_s = -25733.913
 sweep_bw_hz         = 25734
 sweep_repetition_hz = 1
-tx_lat_deg          = 38.319483
+tx_lat_deg          = 30.333900
+tx_lon_deg          = -88.568567
+association         = "USM"
+
+[stations.SSDE]
+freq_mhz            = 4.45050
+sweep_rate_hz_per_s = -25733.913
+sweep_bw_hz         = 25734
+sweep_repetition_hz = 1
+tx_lat_deg          = 29.007967
+tx_lon_deg          = -95.214917
+association         = "TexAM"
+
+[stations.PAFS]
+freq_mhz            = 4.46000
+sweep_rate_hz_per_s = -25733.913
+sweep_bw_hz         = 25734
+sweep_repetition_hz = 1
+tx_lat_deg          = 38.928433
+tx_lon_deg          = -123.727767
+association         = "BML"
+
+[stations.AMAG]
+freq_mhz            = 4.46300
+sweep_rate_hz_per_s = -25733.913
+sweep_bw_hz         = 25734
+sweep_repetition_hz = 1
+tx_lat_deg          = 40.969333
+tx_lon_deg          = -72.123700
+association         = "Rutgers"
+
+[stations.ASSA]
+freq_mhz            = 4.46300
+sweep_rate_hz_per_s = -25733.913
+sweep_bw_hz         = 25734
+sweep_repetition_hz = 1
+tx_lat_deg          = 38.205017
+tx_lon_deg          = -75.152900
+association         = "ODU"
+
+[stations.BLCK]
+freq_mhz            = 4.46300
+sweep_rate_hz_per_s = -25733.913
+sweep_bw_hz         = 25734
+sweep_repetition_hz = 1
+tx_lat_deg          = 41.152800
+tx_lon_deg          = -71.551183
+association         = "Rutgers"
+
+[stations.BMLR]
+freq_mhz            = 4.46300
+sweep_rate_hz_per_s = -25733.913
+sweep_bw_hz         = 25734
+sweep_repetition_hz = 1
+tx_lat_deg          = 38.319533
 tx_lon_deg          = -123.073617
 association         = "BML"
 
+[stations.BRIG]
+freq_mhz            = 4.46300
+sweep_rate_hz_per_s = -25733.913
+sweep_bw_hz         = 25734
+sweep_repetition_hz = 1
+tx_lat_deg          = 39.378367
+tx_lon_deg          = -74.399017
+association         = "Rutgers"
+
+[stations.CBL1]
+freq_mhz            = 4.46300
+sweep_rate_hz_per_s = -47791.553
+sweep_bw_hz         = 47792
+sweep_repetition_hz = 1
+tx_lat_deg          = 42.836667
+tx_lon_deg          = -124.565500
+association         = "OSU"
+
+[stations.CEDR]
+freq_mhz            = 4.46300
+sweep_rate_hz_per_s = -25733.913
+sweep_bw_hz         = 25734
+sweep_repetition_hz = 1
+tx_lat_deg          = 37.673300
+tx_lon_deg          = -75.593033
+association         = "ODU"
+
+[stations.HEMP]
+freq_mhz            = 4.46300
+sweep_rate_hz_per_s = -25733.913
+sweep_bw_hz         = 25734
+sweep_repetition_hz = 1
+tx_lat_deg          = 40.586783
+tx_lon_deg          = -73.589817
+association         = "Rutgers"
+
+[stations.HOOK]
+freq_mhz            = 4.46300
+sweep_rate_hz_per_s = -25733.913
+sweep_bw_hz         = 25734
+sweep_repetition_hz = 1
+tx_lat_deg          = 40.430100
+tx_lon_deg          = -73.983583
+association         = "Rutgers"
+
+[stations.KAL1]
+freq_mhz            = 4.46300
+sweep_rate_hz_per_s = -47791.553
+sweep_bw_hz         = 47792
+sweep_repetition_hz = 1
+tx_lat_deg          = 47.566983
+tx_lon_deg          = -124.361750
+association         = "OSU"
+
+[stations.LISL]
+freq_mhz            = 4.46300
+sweep_rate_hz_per_s = -25733.913
+sweep_bw_hz         = 25734
+sweep_repetition_hz = 1
+tx_lat_deg          = 36.691717
+tx_lon_deg          = -75.922633
+association         = "ODU"
+
+[stations.LOO1]
+freq_mhz            = 4.46300
+sweep_rate_hz_per_s = -47791.553
+sweep_bw_hz         = 47792
+sweep_repetition_hz = 1
+tx_lat_deg          = 46.433200
+tx_lon_deg          = -124.058817
+association         = "OSU"
+
+[stations.LOVE]
+freq_mhz            = 4.46300
+sweep_rate_hz_per_s = -25733.913
+sweep_bw_hz         = 25734
+sweep_repetition_hz = 1
+tx_lat_deg          = 39.736233
+tx_lon_deg          = -74.117050
+association         = "Rutgers"
+
+[stations.MABO]
+freq_mhz            = 4.46300
+sweep_rate_hz_per_s = -47791.553
+sweep_bw_hz         = 47792
+sweep_repetition_hz = 1
+tx_lat_deg          = 17.988133
+tx_lon_deg          = -65.885000
+association         = "UPR"
+
+[stations.MAN1]
+freq_mhz            = 4.46300
+sweep_rate_hz_per_s = -25733.913
+sweep_bw_hz         = 25734
+sweep_repetition_hz = 1
+tx_lat_deg          = 45.640317
+tx_lon_deg          = -123.941817
+association         = "OSU"
+
+[stations.MRCH]
+freq_mhz            = 4.46300
+sweep_rate_hz_per_s = -25733.913
+sweep_bw_hz         = 25734
+sweep_repetition_hz = 1
+tx_lat_deg          = 40.788183
+tx_lon_deg          = -72.745250
+association         = "Rutgers"
+
+[stations.NANT]
+freq_mhz            = 4.46300
+sweep_rate_hz_per_s = -25733.913
+sweep_bw_hz         = 25734
+sweep_repetition_hz = 1
+tx_lat_deg          = 41.250450
+tx_lon_deg          = -69.974067
+association         = "Rutgers"
+
+[stations.NAUS]
+freq_mhz            = 4.46300
+sweep_rate_hz_per_s = -25733.913
+sweep_bw_hz         = 25734
+sweep_repetition_hz = 1
+tx_lat_deg          = 41.844217
+tx_lon_deg          = -69.947233
+association         = "UMassDart"
+
+[stations.OCRA]
+freq_mhz            = 4.46300
+sweep_rate_hz_per_s = -25733.913
+sweep_bw_hz         = 25734
+sweep_repetition_hz = 1
+tx_lat_deg          = 35.103000
+tx_lon_deg          = -75.960433
+association         = "UNC"
+
+[stations.PYFC]
+freq_mhz            = 4.46300
+sweep_rate_hz_per_s = -25733.913
+sweep_bw_hz         = 25734
+sweep_repetition_hz = 1
+tx_lat_deg          = 17.962767
+tx_lon_deg          = -66.618333
+association         = "UPR"
+
+[stations.THOM]
+freq_mhz            = 4.46300
+sweep_rate_hz_per_s = -25733.913
+sweep_bw_hz         = 25734
+sweep_repetition_hz = 1
+tx_lat_deg          = 18.307650
+tx_lon_deg          = -64.957067
+association         = "UPR"
+
+[stations.WAIN]
+freq_mhz            = 4.46300
+sweep_rate_hz_per_s = -25733.913
+sweep_bw_hz         = 25734
+sweep_repetition_hz = 1
+tx_lat_deg          = 70.643367
+tx_lon_deg          = -160.027050
+association         = "UAF"
+
+[stations.WILD]
+freq_mhz            = 4.46300
+sweep_rate_hz_per_s = -99259.376
+sweep_bw_hz         = 49630
+sweep_repetition_hz = 2
+tx_lat_deg          = 38.942150
+tx_lon_deg          = -74.886117
+association         = "Rutgers"
+
+[stations.WIN1]
+freq_mhz            = 4.46300
+sweep_rate_hz_per_s = -47791.553
+sweep_bw_hz         = 47792
+sweep_repetition_hz = 1
+tx_lat_deg          = 43.665833
+tx_lon_deg          = -124.206500
+association         = "OSU"
+
+[stations.WSP1]
+freq_mhz            = 4.46300
+sweep_rate_hz_per_s = -47791.553
+sweep_bw_hz         = 47792
+sweep_repetition_hz = 1
+tx_lat_deg          = 46.902733
+tx_lon_deg          = -124.131550
+association         = "OSU"
+
+[stations.PSLR]
+freq_mhz            = 4.47500
+sweep_rate_hz_per_s = -22057.640
+sweep_bw_hz         = 22058
+sweep_repetition_hz = 1
+tx_lat_deg          = 36.306233
+tx_lon_deg          = -121.901300
+association         = "CODAR"
+
+[stations.PILR]
+freq_mhz            = 4.47550
+sweep_rate_hz_per_s = -22057.640
+sweep_bw_hz         = 22058
+sweep_repetition_hz = 1
+tx_lat_deg          = 37.496750
+tx_lon_deg          = -122.499367
+association         = "CODAR"
+
+[stations.PMGC]
+freq_mhz            = 4.47550
+sweep_rate_hz_per_s = -25733.913
+sweep_bw_hz         = 25734
+sweep_repetition_hz = 1
+tx_lat_deg          = 26.660283
+tx_lon_deg          = -97.454983
+association         = "TexAM"
+
+[stations.SDSN]
+freq_mhz            = 4.48000
+sweep_rate_hz_per_s = -25733.913
+sweep_bw_hz         = 25734
+sweep_repetition_hz = 1
+tx_lat_deg          = 33.029817
+tx_lon_deg          = -118.597117
+association         = "SIO"
+
+[stations.SDSL]
+freq_mhz            = 4.64700
+sweep_rate_hz_per_s = -25733.913
+sweep_bw_hz         = 25734
+sweep_repetition_hz = 1
+tx_lat_deg          = 32.869400
+tx_lon_deg          = -117.253200
+association         = "SIO"
+
+[stations.BRAG]
+freq_mhz            = 4.78500
+sweep_rate_hz_per_s = -25733.913
+sweep_bw_hz         = 25734
+sweep_repetition_hz = 1
+tx_lat_deg          = 39.438017
+tx_lon_deg          = -123.816117
+association         = "BML"
+
 [stations.SHEL]
-freq_mhz            = 4.78495
+freq_mhz            = 4.78500
 sweep_rate_hz_per_s = -25733.913
 sweep_bw_hz         = 25734
 sweep_repetition_hz = 1
@@ -327,35 +406,8 @@ tx_lat_deg          = 40.033367
 tx_lon_deg          = -124.078867
 association         = "BML"
 
-[stations.MAN1]
-freq_mhz            = 4.785
-sweep_rate_hz_per_s = -25733.913
-sweep_bw_hz         = 25734
-sweep_repetition_hz = 1
-tx_lat_deg          = 45.640317
-tx_lon_deg          = -123.941800
-association         = "OSU"
-
-[stations.PSG1]
-freq_mhz            = 4.785
-sweep_rate_hz_per_s = -25733.913
-sweep_bw_hz         = 25734
-sweep_repetition_hz = 1
-tx_lat_deg          = 41.784500
-tx_lon_deg          = -124.254817
-association         = "OSU"
-
-[stations.WIN1]
-freq_mhz            = 4.785
-sweep_rate_hz_per_s = -25733.913
-sweep_bw_hz         = 25734
-sweep_repetition_hz = 1
-tx_lat_deg          = 43.665833
-tx_lon_deg          = -124.206500
-association         = "OSU"
-
 [stations.YHL1]
-freq_mhz            = 4.785
+freq_mhz            = 4.78500
 sweep_rate_hz_per_s = -25733.913
 sweep_bw_hz         = 25734
 sweep_repetition_hz = 1
@@ -363,225 +415,881 @@ tx_lat_deg          = 44.676167
 tx_lon_deg          = -124.077167
 association         = "OSU"
 
-[stations.BRAG]
-freq_mhz            = 4.785
-sweep_rate_hz_per_s = -25634.758
-sweep_bw_hz         = 25635
-sweep_repetition_hz = 1
-tx_lat_deg          = 39.438017
-tx_lon_deg          = -123.816117
-association         = "BML"
-
-[stations.PAFS]
-freq_mhz            = 4.785
-sweep_rate_hz_per_s = -25634.758
-sweep_bw_hz         = 25635
-sweep_repetition_hz = 1
-tx_lat_deg          = 38.928433
-tx_lon_deg          = -123.727767
-association         = "BML"
-
 # ---------------------------------------------------------------------------
-# US West Coast — 12 MHz band
+# 5 MHz (long-range)
 # ---------------------------------------------------------------------------
 
-[stations.STV2]
-freq_mhz            = 12.020
-sweep_rate_hz_per_s = -75073.242
-sweep_bw_hz         = 75073
+[stations.BIGC]
+freq_mhz            = 5.26250
+sweep_rate_hz_per_s = -22057.640
+sweep_bw_hz         = 22058
 sweep_repetition_hz = 1
-tx_lat_deg          = 46.176417
-tx_lon_deg          = -123.978383
-association         = "OSU"
+tx_lat_deg          = 37.088517
+tx_lon_deg          = -122.273400
+association         = "CODAR"
 
-[stations.YHS2]
-freq_mhz            = 12.142470
-sweep_rate_hz_per_s = -75073.242
-sweep_bw_hz         = 75073
+[stations.MARA]
+freq_mhz            = 5.26250
+sweep_rate_hz_per_s = -25733.913
+sweep_bw_hz         = 25734
 sweep_repetition_hz = 1
-tx_lat_deg          = 44.674200
-tx_lon_deg          = -124.075867
-association         = "OSU"
+tx_lat_deg          = 24.740133
+tx_lon_deg          = -80.983300
+association         = "USF"
 
-[stations.GCYN]
-freq_mhz            = 12.145280
-sweep_rate_hz_per_s = -49438.477
-sweep_bw_hz         = 49438
+[stations.NAPL]
+freq_mhz            = 5.26250
+sweep_rate_hz_per_s = -25733.913
+sweep_bw_hz         = 25734
 sweep_repetition_hz = 1
-tx_lat_deg          = 36.439450
-tx_lon_deg          = -121.922217
-association         = "NPS"
+tx_lat_deg          = 26.163117
+tx_lon_deg          = -81.810667
+association         = "USF"
 
-[stations.SCRZ]
-freq_mhz            = 12.14528
-sweep_rate_hz_per_s = -49438.477
-sweep_bw_hz         = 49438
+[stations.RDSR]
+freq_mhz            = 5.26250
+sweep_rate_hz_per_s = -25733.913
+sweep_bw_hz         = 25734
 sweep_repetition_hz = 1
-tx_lat_deg          = 36.949217
-tx_lon_deg          = -122.066100
-association         = "NPS"
+tx_lat_deg          = 27.832800
+tx_lon_deg          = -82.834633
+association         = "USF"
 
-[stations.RFG1]
-freq_mhz            = 12.14965
-sweep_rate_hz_per_s = 100708.008
-sweep_bw_hz         = 100708
+[stations.SBSR]
+freq_mhz            = 5.26250
+sweep_rate_hz_per_s = 25733.913
+sweep_bw_hz         = 25734
 sweep_repetition_hz = 1
-tx_lat_deg          = 34.461200
-tx_lon_deg          = -120.076700
-association         = "UCSB"
+tx_lat_deg          = 42.828883
+tx_lon_deg          = -70.814500
+association         = "WHOI"
 
-[stations.SSD1]
-freq_mhz            = 12.14965
-sweep_rate_hz_per_s = 100708.008
-sweep_bw_hz         = 100708
+[stations.VENI]
+freq_mhz            = 5.26250
+sweep_rate_hz_per_s = -25733.913
+sweep_bw_hz         = 25734
 sweep_repetition_hz = 1
-tx_lat_deg          = 34.419000
-tx_lon_deg          = -119.596083
-association         = "UCSB"
+tx_lat_deg          = 27.077617
+tx_lon_deg          = -82.451633
+association         = "USF"
 
-[stations.FBK1]
-freq_mhz            = 12.149650
-sweep_rate_hz_per_s = 101097.519
-sweep_bw_hz         = 101098
+[stations.WEST]
+freq_mhz            = 5.26250
+sweep_rate_hz_per_s = -25733.913
+sweep_bw_hz         = 25734
 sweep_repetition_hz = 1
-tx_lat_deg          = 34.869717
-tx_lon_deg          = -120.621283
-association         = "SLO"
+tx_lat_deg          = 24.552467
+tx_lon_deg          = -81.766633
+association         = "USF"
 
-[stations.PTC1]
-freq_mhz            = 12.149650
-sweep_rate_hz_per_s = 101097.519
-sweep_bw_hz         = 101098
-sweep_repetition_hz = 1
-tx_lat_deg          = 34.448300
-tx_lon_deg          = -120.471700
-association         = "SLO"
-
-[stations.BML1]
-freq_mhz            = 12.156850
-sweep_rate_hz_per_s = -75363.602
-sweep_bw_hz         = 75364
-sweep_repetition_hz = 1
-tx_lat_deg          = 38.317317
-tx_lon_deg          = -123.072467
-association         = "BML"
-
-[stations.MONT]
-freq_mhz            = 12.189900
+[stations.SDSC]
+freq_mhz            = 5.42000
 sweep_rate_hz_per_s = -51467.827
 sweep_bw_hz         = 51468
 sweep_repetition_hz = 1
+tx_lat_deg          = 32.917750
+tx_lon_deg          = -118.486900
+association         = "SIO"
+
+# ---------------------------------------------------------------------------
+# 12 MHz (mid-range)
+# ---------------------------------------------------------------------------
+
+[stations.WLD2]
+freq_mhz            = 12.23236
+sweep_rate_hz_per_s = -150727.204
+sweep_bw_hz         = 75364
+sweep_repetition_hz = 2
+tx_lat_deg          = 44.383833
+tx_lon_deg          = -124.089667
+association         = "OSU"
+
+# ---------------------------------------------------------------------------
+# 13 MHz (mid-range)
+# ---------------------------------------------------------------------------
+
+[stations.HAUL]
+freq_mhz            = 13.44990
+sweep_rate_hz_per_s = -99259.376
+sweep_bw_hz         = 49630
+sweep_repetition_hz = 2
+tx_lat_deg          = 25.910667
+tx_lon_deg          = -80.121650
+association         = "FAU"
+
+[stations.HILL]
+freq_mhz            = 13.44990
+sweep_rate_hz_per_s = -99259.376
+sweep_bw_hz         = 49630
+sweep_repetition_hz = 2
+tx_lat_deg          = 26.262450
+tx_lon_deg          = -80.080350
+association         = "FAU"
+
+[stations.ACI1]
+freq_mhz            = 13.47500
+sweep_rate_hz_per_s = 95583.106
+sweep_bw_hz         = 47792
+sweep_repetition_hz = 2
+tx_lat_deg          = 34.015800
+tx_lon_deg          = -119.359333
+association         = "UCSB"
+
+[stations.BRAD]
+freq_mhz            = 13.47500
+sweep_rate_hz_per_s = -99259.376
+sweep_bw_hz         = 49630
+sweep_repetition_hz = 2
+tx_lat_deg          = 40.195583
+tx_lon_deg          = -74.008850
+association         = "Rutgers"
+
+[stations.BRMR]
+freq_mhz            = 13.47500
+sweep_rate_hz_per_s = -99259.376
+sweep_bw_hz         = 49630
+sweep_repetition_hz = 2
+tx_lat_deg          = 39.378417
+tx_lon_deg          = -74.398517
+association         = "Rutgers"
+
+[stations.CMPT]
+freq_mhz            = 13.47500
+sweep_rate_hz_per_s = -99259.376
+sweep_bw_hz         = 49630
+sweep_repetition_hz = 2
+tx_lat_deg          = 38.931267
+tx_lon_deg          = -74.961333
+association         = "Rutgers"
+
+[stations.COP1]
+freq_mhz            = 13.47500
+sweep_rate_hz_per_s = 95583.106
+sweep_bw_hz         = 47792
+sweep_repetition_hz = 2
+tx_lat_deg          = 34.407467
+tx_lon_deg          = -119.878783
+association         = "UCSB"
+
+[stations.FBK1]
+freq_mhz            = 13.47500
+sweep_rate_hz_per_s = 95583.106
+sweep_bw_hz         = 47792
+sweep_repetition_hz = 2
+tx_lat_deg          = 34.869750
+tx_lon_deg          = -120.621200
+association         = "SLO"
+
+[stations.HLGT]
+freq_mhz            = 13.47500
+sweep_rate_hz_per_s = -99259.376
+sweep_bw_hz         = 49630
+sweep_repetition_hz = 2
+tx_lat_deg          = 39.532033
+tx_lon_deg          = -74.262133
+association         = "Rutgers"
+
+[stations.PTC1]
+freq_mhz            = 13.47500
+sweep_rate_hz_per_s = 95583.106
+sweep_bw_hz         = 47792
+sweep_repetition_hz = 2
+tx_lat_deg          = 34.448667
+tx_lon_deg          = -120.471650
+association         = "SLO"
+
+[stations.SCI1]
+freq_mhz            = 13.47500
+sweep_rate_hz_per_s = 95583.106
+sweep_bw_hz         = 47792
+sweep_repetition_hz = 2
+tx_lat_deg          = 33.994667
+tx_lon_deg          = -119.632033
+association         = "UCSB"
+
+[stations.SEAB]
+freq_mhz            = 13.47500
+sweep_rate_hz_per_s = -99259.376
+sweep_bw_hz         = 49630
+sweep_repetition_hz = 2
+tx_lat_deg          = 40.366817
+tx_lon_deg          = -73.973517
+association         = "Rutgers"
+
+[stations.SPRK]
+freq_mhz            = 13.47500
+sweep_rate_hz_per_s = -99259.376
+sweep_bw_hz         = 49630
+sweep_repetition_hz = 2
+tx_lat_deg          = 39.932500
+tx_lon_deg          = -74.072550
+association         = "Rutgers"
+
+[stations.WOOD]
+freq_mhz            = 13.47500
+sweep_rate_hz_per_s = -99259.376
+sweep_bw_hz         = 49630
+sweep_repetition_hz = 2
+tx_lat_deg          = 38.990950
+tx_lon_deg          = -74.799000
+association         = "Rutgers"
+
+[stations.BML1]
+freq_mhz            = 13.50000
+sweep_rate_hz_per_s = -102935.654
+sweep_bw_hz         = 51468
+sweep_repetition_hz = 2
+tx_lat_deg          = 38.317383
+tx_lon_deg          = -123.072317
+association         = "BML"
+
+[stations.CDDO]
+freq_mhz            = 13.50000
+sweep_rate_hz_per_s = -99259.376
+sweep_bw_hz         = 49630
+sweep_repetition_hz = 2
+tx_lat_deg          = 18.101000
+tx_lon_deg          = -67.189683
+association         = "UPR"
+
+[stations.ESPT]
+freq_mhz            = 13.50000
+sweep_rate_hz_per_s = 198518.754
+sweep_bw_hz         = 99259
+sweep_repetition_hz = 2
+tx_lat_deg          = 42.586250
+tx_lon_deg          = -70.650556
+association         = "WHOI"
+
+[stations.FRDO]
+freq_mhz            = 13.50000
+sweep_rate_hz_per_s = -99259.376
+sweep_bw_hz         = 49630
+sweep_repetition_hz = 2
+tx_lat_deg          = 18.386467
+tx_lon_deg          = -65.619300
+association         = "UPR"
+
+[stations.GCVE]
+freq_mhz            = 13.50000
+sweep_rate_hz_per_s = -102935.654
+sweep_bw_hz         = 51468
+sweep_repetition_hz = 2
+tx_lat_deg          = 38.567183
+tx_lon_deg          = -123.331550
+association         = "BML"
+
+[stations.KBCH]
+freq_mhz            = 13.50000
+sweep_rate_hz_per_s = -99259.376
+sweep_bw_hz         = 49630
+sweep_repetition_hz = 2
+tx_lat_deg          = 60.463883
+tx_lon_deg          = -151.281950
+association         = "UAF"
+
+[stations.PREY]
+freq_mhz            = 13.50000
+sweep_rate_hz_per_s = -102935.654
+sweep_bw_hz         = 51468
+sweep_repetition_hz = 2
+tx_lat_deg          = 38.047150
+tx_lon_deg          = -122.989133
+association         = "BML"
+
+[stations.PTWN]
+freq_mhz            = 13.50000
+sweep_rate_hz_per_s = 198518.754
+sweep_bw_hz         = 99259
+sweep_repetition_hz = 2
+tx_lat_deg          = 42.078833
+tx_lon_deg          = -70.220333
+association         = "WHOI"
+
+[stations.SBAY]
+freq_mhz            = 13.50000
+sweep_rate_hz_per_s = -99259.376
+sweep_bw_hz         = 49630
+sweep_repetition_hz = 2
+tx_lat_deg          = 18.475067
+tx_lon_deg          = -66.139783
+association         = "UPR"
+
+[stations.SDPD]
+freq_mhz            = 13.50000
+sweep_rate_hz_per_s = -99259.376
+sweep_bw_hz         = 49630
+sweep_repetition_hz = 2
+tx_lat_deg          = 60.112500
+tx_lon_deg          = -151.576383
+association         = "UAF"
+
+[stations.SLID]
+freq_mhz            = 13.50000
+sweep_rate_hz_per_s = -102935.654
+sweep_bw_hz         = 51468
+sweep_repetition_hz = 2
+tx_lat_deg          = 37.872433
+tx_lon_deg          = -122.597717
+association         = "BML"
+
+[stations.SOB2]
+freq_mhz            = 13.50000
+sweep_rate_hz_per_s = 198518.754
+sweep_bw_hz         = 99259
+sweep_repetition_hz = 2
+tx_lat_deg          = 41.350183
+tx_lon_deg          = -70.526584
+association         = "WHOI"
+
+[stations.WSH1]
+freq_mhz            = 13.50000
+sweep_rate_hz_per_s = -198518.754
+sweep_bw_hz         = 99259
+sweep_repetition_hz = 2
+tx_lat_deg          = 44.161500
+tx_lon_deg          = -124.117500
+association         = "OSU"
+
+[stations.YHS2]
+freq_mhz            = 13.50000
+sweep_rate_hz_per_s = -198518.754
+sweep_bw_hz         = 99259
+sweep_repetition_hz = 2
+tx_lat_deg          = 44.674017
+tx_lon_deg          = -124.075567
+association         = "OSU"
+
+[stations.ARG1]
+freq_mhz            = 13.52500
+sweep_rate_hz_per_s = -95583.106
+sweep_bw_hz         = 47792
+sweep_repetition_hz = 2
+tx_lat_deg          = 34.576950
+tx_lon_deg          = -120.650500
+association         = "SLO"
+
+[stations.DCSR]
+freq_mhz            = 13.52500
+sweep_rate_hz_per_s = -95583.106
+sweep_bw_hz         = 47792
+sweep_repetition_hz = 2
+tx_lat_deg          = 35.202450
+tx_lon_deg          = -120.846083
+association         = "SLO"
+
+[stations.ESTR]
+freq_mhz            = 13.52500
+sweep_rate_hz_per_s = -95583.106
+sweep_bw_hz         = 47792
+sweep_repetition_hz = 2
+tx_lat_deg          = 35.459750
+tx_lon_deg          = -120.977633
+association         = "SLO"
+
+[stations.LUIS]
+freq_mhz            = 13.52500
+sweep_rate_hz_per_s = -95583.106
+sweep_bw_hz         = 47792
+sweep_repetition_hz = 2
+tx_lat_deg          = 35.160817
+tx_lon_deg          = -120.758317
+association         = "SLO"
+
+[stations.MGS1]
+freq_mhz            = 13.52500
+sweep_rate_hz_per_s = -95583.106
+sweep_bw_hz         = 47792
+sweep_repetition_hz = 2
+tx_lat_deg          = 34.204917
+tx_lon_deg          = -119.251633
+association         = "UCSB"
+
+[stations.NIC1]
+freq_mhz            = 13.52500
+sweep_rate_hz_per_s = -95583.106
+sweep_bw_hz         = 47792
+sweep_repetition_hz = 2
+tx_lat_deg          = 34.042333
+tx_lon_deg          = -118.915367
+association         = "UCSB"
+
+[stations.PTM1]
+freq_mhz            = 13.52500
+sweep_rate_hz_per_s = -95583.106
+sweep_bw_hz         = 47792
+sweep_repetition_hz = 2
+tx_lat_deg          = 34.096033
+tx_lon_deg          = -119.106983
+association         = "UCSB"
+
+[stations.RFG1]
+freq_mhz            = 13.52500
+sweep_rate_hz_per_s = -95583.106
+sweep_bw_hz         = 47792
+sweep_repetition_hz = 2
+tx_lat_deg          = 34.461083
+tx_lon_deg          = -120.076983
+association         = "UCSB"
+
+[stations.SCCI]
+freq_mhz            = 13.52500
+sweep_rate_hz_per_s = -95583.106
+sweep_bw_hz         = 47792
+sweep_repetition_hz = 2
+tx_lat_deg          = 33.446867
+tx_lon_deg          = -118.478217
+association         = "USC"
+
+[stations.SCDH]
+freq_mhz            = 13.52500
+sweep_rate_hz_per_s = -95583.106
+sweep_bw_hz         = 47792
+sweep_repetition_hz = 2
+tx_lat_deg          = 33.943233
+tx_lon_deg          = -118.442383
+association         = "USC"
+
+[stations.SNI1]
+freq_mhz            = 13.52500
+sweep_rate_hz_per_s = -95583.106
+sweep_bw_hz         = 47792
+sweep_repetition_hz = 2
+tx_lat_deg          = 33.280083
+tx_lon_deg          = -119.522333
+association         = "UCSB"
+
+[stations.SSD1]
+freq_mhz            = 13.52500
+sweep_rate_hz_per_s = -95583.106
+sweep_bw_hz         = 47792
+sweep_repetition_hz = 2
+tx_lat_deg          = 34.419033
+tx_lon_deg          = -119.596133
+association         = "UCSB"
+
+# ---------------------------------------------------------------------------
+# 16 MHz (mid-range)
+# ---------------------------------------------------------------------------
+
+[stations.GCYN]
+freq_mhz            = 16.15000
+sweep_rate_hz_per_s = -102935.654
+sweep_bw_hz         = 51468
+sweep_repetition_hz = 2
+tx_lat_deg          = 36.439983
+tx_lon_deg          = -121.922483
+association         = "CODAR"
+
+[stations.MONT]
+freq_mhz            = 16.15000
+sweep_rate_hz_per_s = -102935.654
+sweep_bw_hz         = 51468
+sweep_repetition_hz = 2
 tx_lat_deg          = 37.533717
 tx_lon_deg          = -122.519217
-association         = "SFSU"
+association         = "CODAR"
 
-[stations.PESC]
-freq_mhz            = 12.190
-sweep_rate_hz_per_s = -51269.543
-sweep_bw_hz         = 51270
-sweep_repetition_hz = 1
-tx_lat_deg          = 37.252483
-tx_lon_deg          = -122.416567
-association         = "NPS"
-
-[stations.NPGS]
-freq_mhz            = 12.275
-sweep_rate_hz_per_s = -100708.008
-sweep_bw_hz         = 100708
-sweep_repetition_hz = 1
-tx_lat_deg          = 36.603333
-tx_lon_deg          = -121.871950
-association         = "NPS"
+[stations.SCRZ]
+freq_mhz            = 16.15000
+sweep_rate_hz_per_s = -102935.654
+sweep_bw_hz         = 51468
+sweep_repetition_hz = 2
+tx_lat_deg          = 36.948283
+tx_lon_deg          = -122.065933
+association         = "CODAR"
 
 # ---------------------------------------------------------------------------
-# US West Coast — 25 MHz band (short-range)
+# 24-26 MHz (short-range)
 # ---------------------------------------------------------------------------
 
-[stations.PBON]
-freq_mhz            = 24.100
-sweep_rate_hz_per_s = -99792.473
-sweep_bw_hz         = 199585
-sweep_repetition_hz = 0.5
-tx_lat_deg          = 37.815483
-tx_lon_deg          = -122.529900
-association         = "SFSU"
+[stations.GPTP]
+freq_mhz            = 24.54993
+sweep_rate_hz_per_s = -301454.406
+sweep_bw_hz         = 150727
+sweep_repetition_hz = 2
+tx_lat_deg          = 30.347783
+tx_lon_deg          = -89.086983
+association         = "USM"
+
+[stations.BISL]
+freq_mhz            = 24.55000
+sweep_rate_hz_per_s = -198518.754
+sweep_bw_hz         = 99259
+sweep_repetition_hz = 2
+tx_lat_deg          = 41.152583
+tx_lon_deg          = -71.551833
+association         = "URI"
+
+[stations.FORT]
+freq_mhz            = 24.55000
+sweep_rate_hz_per_s = -600007.996
+sweep_bw_hz         = 150002
+sweep_repetition_hz = 4
+tx_lat_deg          = 37.712267
+tx_lon_deg          = -122.501317
+association         = "CODAR"
+
+[stations.GCAP]
+freq_mhz            = 24.55000
+sweep_rate_hz_per_s = -301454.406
+sweep_bw_hz         = 150727
+sweep_repetition_hz = 2
+tx_lat_deg          = 40.982550
+tx_lon_deg          = -73.623783
+association         = "UConn"
+
+[stations.HLPN]
+freq_mhz            = 24.55000
+sweep_rate_hz_per_s = -801427.612
+sweep_bw_hz         = 200357
+sweep_repetition_hz = 4
+tx_lat_deg          = 38.794033
+tx_lon_deg          = -75.089183
+association         = "Rutgers"
+
+[stations.LEWE]
+freq_mhz            = 24.55000
+sweep_rate_hz_per_s = -801427.612
+sweep_bw_hz         = 200357
+sweep_repetition_hz = 4
+tx_lat_deg          = 38.781783
+tx_lon_deg          = -75.128250
+association         = "Rutgers"
+
+[stations.MBAC]
+freq_mhz            = 24.55000
+sweep_rate_hz_per_s = -301454.406
+sweep_bw_hz         = 150727
+sweep_repetition_hz = 2
+tx_lat_deg          = 36.903017
+tx_lon_deg          = -121.843033
+association         = "CODAR"
+
+[stations.MCPK]
+freq_mhz            = 24.55000
+sweep_rate_hz_per_s = -602908.812
+sweep_bw_hz         = 150727
+sweep_repetition_hz = 4
+tx_lat_deg          = 29.744533
+tx_lon_deg          = -94.828667
+association         = "RATES"
+
+[stations.MISQ]
+freq_mhz            = 24.55000
+sweep_rate_hz_per_s = -198518.754
+sweep_bw_hz         = 99259
+sweep_repetition_hz = 2
+tx_lat_deg          = 41.322933
+tx_lon_deg          = -71.804217
+association         = "URI"
 
 [stations.MLML]
-freq_mhz            = 24.120
-sweep_rate_hz_per_s = -150146.515
-sweep_bw_hz         = 300293
-sweep_repetition_hz = 0.5
-tx_lat_deg          = 36.803667
-tx_lon_deg          = -121.787917
-association         = "NPS"
+freq_mhz            = 24.55000
+sweep_rate_hz_per_s = -301454.406
+sweep_bw_hz         = 150727
+sweep_repetition_hz = 2
+tx_lat_deg          = 36.803950
+tx_lon_deg          = -121.787983
+association         = "CODAR"
+
+[stations.MOLA]
+freq_mhz            = 24.55000
+sweep_rate_hz_per_s = -602908.812
+sweep_bw_hz         = 150727
+sweep_repetition_hz = 4
+tx_lat_deg          = 29.445700
+tx_lon_deg          = -94.917083
+association         = "RATES"
+
+[stations.PBON]
+freq_mhz            = 24.55000
+sweep_rate_hz_per_s = -599232.544
+sweep_bw_hz         = 149808
+sweep_repetition_hz = 4
+tx_lat_deg          = 37.815483
+tx_lon_deg          = -122.529900
+association         = "BML"
+
+[stations.PORT]
+freq_mhz            = 24.55000
+sweep_rate_hz_per_s = -801427.612
+sweep_bw_hz         = 200357
+sweep_repetition_hz = 4
+tx_lat_deg          = 40.441300
+tx_lon_deg          = -74.099333
+association         = "Rutgers"
+
+[stations.PPNS]
+freq_mhz            = 24.55000
+sweep_rate_hz_per_s = -301454.406
+sweep_bw_hz         = 150727
+sweep_repetition_hz = 2
+tx_lat_deg          = 36.636717
+tx_lon_deg          = -121.934983
+association         = "CODAR"
+
+[stations.SCNB]
+freq_mhz            = 24.55000
+sweep_rate_hz_per_s = -301454.406
+sweep_bw_hz         = 150727
+sweep_repetition_hz = 2
+tx_lat_deg          = 33.606000
+tx_lon_deg          = -117.931417
+association         = "USC"
+
+[stations.SCPF]
+freq_mhz            = 24.55000
+sweep_rate_hz_per_s = -301454.406
+sweep_bw_hz         = 150727
+sweep_repetition_hz = 2
+tx_lat_deg          = 33.704867
+tx_lon_deg          = -118.293983
+association         = "USC"
+
+[stations.SDSE]
+freq_mhz            = 24.55000
+sweep_rate_hz_per_s = -198518.754
+sweep_bw_hz         = 99259
+sweep_repetition_hz = 2
+tx_lat_deg          = 33.024483
+tx_lon_deg          = -117.286133
+association         = "SIO"
+
+[stations.SDUT]
+freq_mhz            = 24.55000
+sweep_rate_hz_per_s = -198518.754
+sweep_bw_hz         = 99259
+sweep_repetition_hz = 2
+tx_lat_deg          = 33.388200
+tx_lon_deg          = -117.595500
+association         = "SIO"
+
+[stations.SMPT]
+freq_mhz            = 24.55000
+sweep_rate_hz_per_s = -602908.812
+sweep_bw_hz         = 150727
+sweep_repetition_hz = 4
+tx_lat_deg          = 29.546417
+tx_lon_deg          = -94.788100
+association         = "RATES"
+
+[stations.PCYC]
+freq_mhz            = 24.55011
+sweep_rate_hz_per_s = -301454.406
+sweep_bw_hz         = 150727
+sweep_repetition_hz = 2
+tx_lat_deg          = 30.312233
+tx_lon_deg          = -89.241500
+association         = "USM"
 
 [stations.SDPL]
-freq_mhz            = 24.500
-sweep_rate_hz_per_s = -101097.519
-sweep_bw_hz         = 202195
-sweep_repetition_hz = 0.5
+freq_mhz            = 24.60000
+sweep_rate_hz_per_s = -198518.754
+sweep_bw_hz         = 99259
+sweep_repetition_hz = 2
 tx_lat_deg          = 32.665833
 tx_lon_deg          = -117.239583
 association         = "SIO"
 
-# ---------------------------------------------------------------------------
-# US West Coast — 40 MHz band (very-short-range)
-# ---------------------------------------------------------------------------
+[stations.SDBP]
+freq_mhz            = 24.60023
+sweep_rate_hz_per_s = -198518.754
+sweep_bw_hz         = 99259
+sweep_repetition_hz = 2
+tx_lat_deg          = 32.535917
+tx_lon_deg          = -117.123100
+association         = "SIO"
 
-[stations.TRES]
-freq_mhz            = 40.750
-sweep_rate_hz_per_s = -375366.180
-sweep_bw_hz         = 750732
-sweep_repetition_hz = 0.5
-tx_lat_deg          = 37.830467
-tx_lon_deg          = -122.377250
-association         = "SFSU"
+[stations.SDCP]
+freq_mhz            = 25.40000
+sweep_rate_hz_per_s = 202195.038
+sweep_bw_hz         = 101098
+sweep_repetition_hz = 2
+tx_lat_deg          = 33.257733
+tx_lon_deg          = -117.436800
+association         = "SIO"
+
+[stations.SDDP]
+freq_mhz            = 25.60000
+sweep_rate_hz_per_s = -198518.754
+sweep_bw_hz         = 99259
+sweep_repetition_hz = 2
+tx_lat_deg          = 33.460683
+tx_lon_deg          = -117.706683
+association         = "SIO"
+
+[stations.FLND]
+freq_mhz            = 26.25100
+sweep_rate_hz_per_s = -400713.808
+sweep_bw_hz         = 100178
+sweep_repetition_hz = 4
+tx_lat_deg          = 36.919433
+tx_lon_deg          = -76.053917
+association         = "ODU"
+
+[stations.SUNS]
+freq_mhz            = 26.25100
+sweep_rate_hz_per_s = -400713.808
+sweep_bw_hz         = 100178
+sweep_repetition_hz = 4
+tx_lat_deg          = 37.137900
+tx_lon_deg          = -75.972133
+association         = "ODU"
+
+[stations.VIEW]
+freq_mhz            = 26.25100
+sweep_rate_hz_per_s = -400713.808
+sweep_bw_hz         = 100178
+sweep_repetition_hz = 4
+tx_lat_deg          = 36.949933
+tx_lon_deg          = -76.243183
+association         = "ODU"
+
+[stations.CAPE]
+freq_mhz            = 26.30000
+sweep_rate_hz_per_s = -801427.612
+sweep_bw_hz         = 200357
+sweep_repetition_hz = 4
+tx_lat_deg          = 39.073767
+tx_lon_deg          = -74.912367
+association         = "Rutgers"
+
+[stations.OLDB]
+freq_mhz            = 26.30000
+sweep_rate_hz_per_s = -801427.612
+sweep_bw_hz         = 200357
+sweep_repetition_hz = 4
+tx_lat_deg          = 40.457400
+tx_lon_deg          = -74.251983
+association         = "Rutgers"
+
+[stations.SCDB]
+freq_mhz            = 26.30000
+sweep_rate_hz_per_s = -301454.406
+sweep_bw_hz         = 150727
+sweep_repetition_hz = 2
+tx_lat_deg          = 34.033300
+tx_lon_deg          = -118.733700
+association         = "USC"
+
+[stations.SCTB]
+freq_mhz            = 26.30000
+sweep_rate_hz_per_s = 301454.406
+sweep_bw_hz         = 150727
+sweep_repetition_hz = 2
+tx_lat_deg          = 33.811683
+tx_lon_deg          = -118.391433
+association         = "USC"
+
+[stations.SILD]
+freq_mhz            = 26.30000
+sweep_rate_hz_per_s = -801427.612
+sweep_bw_hz         = 200357
+sweep_repetition_hz = 4
+tx_lat_deg          = 40.543633
+tx_lon_deg          = -74.124533
+association         = "Rutgers"
+
+[stations.SDWW]
+freq_mhz            = 26.31000
+sweep_rate_hz_per_s = -198518.754
+sweep_bw_hz         = 99259
+sweep_repetition_hz = 2
+tx_lat_deg          = 32.679917
+tx_lon_deg          = -117.247417
+association         = "SIO"
+
+[stations.STLI]
+freq_mhz            = 26.31000
+sweep_rate_hz_per_s = -301454.406
+sweep_bw_hz         = 150727
+sweep_repetition_hz = 2
+tx_lat_deg          = 40.908750
+tx_lon_deg          = -73.587283
+association         = "UConn"
+
+[stations.FOCF]
+freq_mhz            = 26.31032
+sweep_rate_hz_per_s = 882305.596
+sweep_bw_hz         = 220576
+sweep_repetition_hz = 4
+tx_lat_deg          = 42.159917
+tx_lon_deg          = -70.704883
+association         = "WHOI"
+
+# ---------------------------------------------------------------------------
+# 40-44 MHz (very-short-range)
+# ---------------------------------------------------------------------------
 
 [stations.ANGL]
-freq_mhz            = 40.750
-sweep_rate_hz_per_s = -374979.889
-sweep_bw_hz         = 749960
-sweep_repetition_hz = 0.5
+freq_mhz            = 41.34000
+sweep_rate_hz_per_s = -2400003.416
+sweep_bw_hz         = 600001
+sweep_repetition_hz = 4
 tx_lat_deg          = 37.853317
 tx_lon_deg          = -122.419200
-association         = "SFSU"
+association         = "CODAR"
 
-# ---------------------------------------------------------------------------
-# Maine / Atlantic Canada — 4.82 MHz band
-# ---------------------------------------------------------------------------
+[stations.CRIS]
+freq_mhz            = 41.34000
+sweep_rate_hz_per_s = -2400606.444
+sweep_bw_hz         = 600152
+sweep_repetition_hz = 4
+tx_lat_deg          = 37.806367
+tx_lon_deg          = -122.465967
+association         = "CODAR"
 
-[stations.CSTM]
-freq_mhz            = 4.820
-sweep_rate_hz_per_s = -33086.460
-sweep_bw_hz         = 33086
-sweep_repetition_hz = 1
-tx_lat_deg          = 44.086050
-tx_lon_deg          = -66.211433
-association         = "UMaine"
+[stations.RTC1]
+freq_mhz            = 41.34000
+sweep_rate_hz_per_s = -2404282.716
+sweep_bw_hz         = 601071
+sweep_repetition_hz = 4
+tx_lat_deg          = 37.889900
+tx_lon_deg          = -122.445933
+association         = "CODAR"
 
-[stations.GMNB]
-freq_mhz            = 4.820
-sweep_rate_hz_per_s = -33086.460
-sweep_bw_hz         = 33086
-sweep_repetition_hz = 1
-tx_lat_deg          = 44.600617
-tx_lon_deg          = -66.904467
-association         = "UMaine"
+[stations.SAUS]
+freq_mhz            = 41.34000
+sweep_rate_hz_per_s = -2400606.444
+sweep_bw_hz         = 600152
+sweep_repetition_hz = 4
+tx_lat_deg          = 37.843950
+tx_lon_deg          = -122.477200
+association         = "CODAR"
 
-[stations.GRNI]
-freq_mhz            = 4.820
-sweep_rate_hz_per_s = -33086.460
-sweep_bw_hz         = 33086
-sweep_repetition_hz = 1
-tx_lat_deg          = 44.024733
-tx_lon_deg          = -68.860717
-association         = "UMaine"
+[stations.BRVW]
+freq_mhz            = 41.50000
+sweep_rate_hz_per_s = -1198465.088
+sweep_bw_hz         = 299616
+sweep_repetition_hz = 4
+tx_lat_deg          = 45.846967
+tx_lon_deg          = -84.727333
+association         = "MTU"
 
-[stations.CLHB]
-freq_mhz            = 4.820
-sweep_rate_hz_per_s = -32958.973
-sweep_bw_hz         = 32959
-sweep_repetition_hz = 1
-tx_lat_deg          = 43.455983
-tx_lon_deg          = -65.654650
-association         = "CCG"
+[stations.FTMK]
+freq_mhz            = 41.50000
+sweep_rate_hz_per_s = -1198465.088
+sweep_bw_hz         = 299616
+sweep_repetition_hz = 4
+tx_lat_deg          = 45.786400
+tx_lon_deg          = -84.736833
+association         = "MTU"
+
+[stations.PLPI]
+freq_mhz            = 43.67500
+sweep_rate_hz_per_s = -1198465.088
+sweep_bw_hz         = 299616
+sweep_repetition_hz = 4
+tx_lat_deg          = 29.865083
+tx_lon_deg          = -93.923783
+association         = "RATES"
+
+[stations.EXPL]
+freq_mhz            = 43.68500
+sweep_rate_hz_per_s = 2400606.444
+sweep_bw_hz         = 600152
+sweep_repetition_hz = 4
+tx_lat_deg          = 37.802900
+tx_lon_deg          = -122.397100
+association         = "CODAR"
