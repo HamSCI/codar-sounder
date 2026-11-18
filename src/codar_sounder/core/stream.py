@@ -290,6 +290,13 @@ class RadiodIQSource:
         self._filled = 0
         self._next_index = 0
         self.dropped_cpis = 0
+        # Continuity epoch: the RTP of its first sample and the samples
+        # delivered since.  A batch whose delivered_rtp_start disagrees
+        # with that count starts a new epoch with its own anchor.
+        self._epoch = 0
+        self._epoch_rtp: Optional[int] = None
+        self._epoch_count = 0
+        self.rtp_discontinuities = 0
         while True:
             try:
                 self._cpi_queue.get_nowait()
@@ -337,6 +344,7 @@ class RadiodIQSource:
             first_rtp = getattr(quality, "first_rtp_timestamp", None)
             if first_rtp is not None:
                 self._anchor_first_rtp = int(first_rtp)
+        self._check_continuity(getattr(quality, "delivered_rtp_start", None))
         arr = np.asarray(samples, dtype=np.complex64)
         if not np.all(np.isfinite(arr)):
             arr = np.where(np.isfinite(arr), arr, np.complex64(0))
@@ -344,6 +352,7 @@ class RadiodIQSource:
         too_large = np.abs(arr) > 100.0
         if np.any(too_large):
             arr = np.where(too_large, np.complex64(0), arr)
+        self._epoch_count += arr.size
         idx = 0
         n = self.cpi_n_samples
         while idx < arr.size:
@@ -354,7 +363,8 @@ class RadiodIQSource:
             if self._filled == n:
                 k = self._next_index
                 try:
-                    self._cpi_queue.put_nowait((self._buf, k))
+                    self._cpi_queue.put_nowait(
+                        (self._buf, k, self._epoch, self._epoch_rtp))
                 except Exception:
                     # The consumer is a whole queue behind: drop this CPI.
                     # Its successors keep their true labels.
@@ -367,7 +377,45 @@ class RadiodIQSource:
                 self._filled = 0
                 self._next_index = k + 1
 
-    def _compute_anchor_utc(self) -> datetime:
+    def _check_continuity(self, rtp0) -> None:
+        """Compare a batch's first-sample RTP with the samples counted
+        since the epoch began; on disagreement, start a new epoch.
+
+        ka9q-python zero-fills lost packets, but not every case: a gap past
+        its cap (15 s at 64 kHz), a late packet re-emitted after recovery,
+        a radiod restart that re-bases RTP.  Each makes the count differ
+        from elapsed RTP, and every label after it would shift silently.
+        Timing faults are exposed, never smoothed: the partial CPI is
+        discarded, the fault is logged and counted, and later CPIs label
+        from the new epoch's own anchor.  Without ``delivered_rtp_start``
+        (older ka9q-python) there is nothing to check against."""
+        if rtp0 is None:
+            if self._epoch_rtp is None:
+                self._epoch_rtp = self._anchor_first_rtp
+            return
+        rtp0 = int(rtp0) & 0xFFFFFFFF
+        if self._epoch_rtp is None:
+            self._epoch_rtp = rtp0
+            self._epoch_count = 0
+            return
+        if (rtp0 - self._epoch_rtp) & 0xFFFFFFFF == self._epoch_count & 0xFFFFFFFF:
+            return
+        self.rtp_discontinuities += 1
+        log.error(
+            "RadiodIQSource: RTP discontinuity: batch starts at rtp %d, the "
+            "sample count expects %d (%+d samples); CPI %d (%d samples) "
+            "discarded, new anchor (%d discontinuities since start)",
+            rtp0, (self._epoch_rtp + self._epoch_count) & 0xFFFFFFFF,
+            ((rtp0 - self._epoch_rtp - self._epoch_count + 2**31) % 2**32) - 2**31,
+            self._next_index, self._filled, self.rtp_discontinuities)
+        self._epoch += 1
+        self._epoch_rtp = rtp0
+        self._epoch_count = 0
+        self._filled = 0
+        self._next_index = 0
+
+    def _compute_anchor_utc(self, first_rtp: Optional[int] = None,
+                            samples_behind: int = 0) -> datetime:
         """Derive the UTC timestamp of the very first sample delivered.
 
         Delegates to the suite-shared hamsci_dsp.timing.acquire_anchor_utc
@@ -386,19 +434,24 @@ class RadiodIQSource:
         from hamsci_dsp.timing import acquire_anchor_utc
         from ka9q import rtp_to_utc  # type: ignore
 
+        if first_rtp is None:
+            first_rtp = self._anchor_first_rtp
         a = acquire_anchor_utc(
-            first_rtp=self._anchor_first_rtp,
+            first_rtp=first_rtp,
             channel_info=self._channel_info,
             rtp_to_utc=rtp_to_utc,
             authority_reader=self._authority_reader,
-            samples_behind=0,                 # codar anchors the first delivered sample
+            # Samples delivered since first_rtp: the wall-clock fallback
+            # subtracts them, so it names the epoch's first sample, not
+            # the moment a CPI was dequeued (~one CPI later).
+            samples_behind=int(samples_behind),
             sample_rate=int(self.sample_rate_hz),
         )
         log.info(
             "RadiodIQSource: CPI anchor %s (rtp=%s, source=%s, authority=%s, "
             "offset=%+.6fs)",
             a.datetime.isoformat(),
-            self._anchor_first_rtp,
+            first_rtp,
             a.source,
             (a.snapshot.t_level_active if a.snapshot else "unavailable"),
             a.offset_seconds,
@@ -466,11 +519,13 @@ class RadiodIQSource:
         )
         self._stream.start()
 
+        anchor_epoch: Optional[int] = None
         anchor_utc: Optional[datetime] = None
+        n = self.cpi_n_samples
         try:
             while not self._stopped.is_set():
                 try:
-                    buf, k = self._cpi_queue.get(timeout=1.0)
+                    buf, k, epoch, epoch_rtp = self._cpi_queue.get(timeout=1.0)
                 except Exception:
                     continue                 # timeout — just check stopped flag
                 # Crash-safe keep-alive: if a finite lifetime was
@@ -493,11 +548,17 @@ class RadiodIQSource:
                 # self._anchor_first_rtp; derive the RTP-anchored
                 # UTC of the first sample ever delivered, applying
                 # hf-timestd's offset when available (§4.5).
-                if anchor_utc is None:
-                    anchor_utc = self._compute_anchor_utc()
+                if anchor_epoch != epoch:
+                    behind = self._epoch_count if epoch == self._epoch else 0
+                    anchor_utc = self._compute_anchor_utc(
+                        first_rtp=epoch_rtp, samples_behind=behind)
+                    anchor_epoch = epoch
                 # The CPI's own position in the stream, never a count of
                 # CPIs yielded: a dropped CPI shifts nothing after it.
-                yield (buf, anchor_utc + timedelta(seconds=k * self.cpi_seconds))
+                # Samples, not cpi_seconds, so a rate x CPI that is not an
+                # integer cannot drift.
+                yield (buf, anchor_utc + timedelta(
+                    seconds=k * n / self.sample_rate_hz))
         finally:
             try:
                 self._stream.stop()

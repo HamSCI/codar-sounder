@@ -212,13 +212,24 @@ def _small(**kw):
     return _src(sample_rate_hz=1000, cpi_seconds=1.0, **kw)
 
 
-def _feed(src, n_samples, chunk=300, value=1.0):
-    q = SimpleNamespace(first_rtp_timestamp=5_000)
+def _feed(src, n_samples, chunk=300, value=None, rtp=None):
+    """Feed samples in chunks.  value=None feeds a running ramp (sample i
+    carries i % 97, under the sanitiser's |x| > 100 clip), so content and
+    order are checkable.  rtp, when given, is the
+    delivered_rtp_start of the first chunk; later chunks follow on."""
+    start = getattr(src, "_fed", 0)
     left = n_samples
+    pos = start
     while left > 0:
         k = min(chunk, left)
-        src._on_samples(np.full(k, value, dtype=np.complex64), q)
+        arr = ((np.arange(pos, pos + k) % 97).astype(np.float32).astype(np.complex64)
+               if value is None else np.full(k, value, dtype=np.complex64))
+        q = SimpleNamespace(first_rtp_timestamp=5_000,
+                            delivered_rtp_start=None if rtp is None else rtp + (pos - start))
+        src._on_samples(arr, q)
+        pos += k
         left -= k
+    src._fed = pos
 
 
 def _iterate(src, n):
@@ -239,14 +250,14 @@ class TestCpiTiming:
         src = _small()
         _feed(src, 2500)                          # 2.5 CPIs
         got = [src._cpi_queue.get_nowait() for _ in range(src._cpi_queue.qsize())]
-        assert [k for _, k in got] == [0, 1]
-        assert all(buf.size == 1000 for buf, _ in got)
+        assert [k for _, k, _, _ in got] == [0, 1]
+        assert all(buf.size == 1000 for buf, *_ in got)
         assert src._filled == 500                 # the third CPI is half full
 
     def test_a_cpi_the_consumer_cannot_take_is_dropped_whole(self):
         src = _small()
         _feed(src, 1000 * (src.CPI_QUEUE_MAX + 2))
-        kept = [k for _, k in (src._cpi_queue.get_nowait()
+        kept = [k for _, k, _, _ in (src._cpi_queue.get_nowait()
                                for _ in range(src._cpi_queue.qsize()))]
         assert kept == list(range(src.CPI_QUEUE_MAX))
         assert src.dropped_cpis == 2
@@ -276,7 +287,7 @@ class TestCpiTiming:
         bad[3] = np.nan
         bad[4] = 1e30
         src._on_samples(bad, q)
-        buf, _ = src._cpi_queue.get_nowait()
+        buf, *_ = src._cpi_queue.get_nowait()
         assert buf[3] == 0 and buf[4] == 0 and np.all(np.isfinite(buf))
 
     def test_reprovisioning_resets_the_assembly(self):
@@ -310,3 +321,77 @@ def _iterate_prefilled(src, n):
                            side_effect=_stream, create=True), \
          mock.patch.object(type(src), "_compute_anchor_utc", return_value=ANCHOR):
         return list(itertools.islice(iter(src), n))
+
+
+class TestCpiContentAndContinuity:
+
+    def test_each_cpi_holds_its_own_samples_in_order(self):
+        src = _small()
+        _feed(src, 3000, chunk=377)               # chunks straddle CPI edges
+        for _ in range(3):
+            buf, k, _, _ = src._cpi_queue.get_nowait()
+            assert np.array_equal(buf.real, np.arange(k * 1000, (k + 1) * 1000) % 97)
+
+    def test_continuous_rtp_keeps_one_epoch(self):
+        src = _small()
+        _feed(src, 2500, rtp=9_000)
+        assert src.rtp_discontinuities == 0
+        assert src._epoch == 0 and src._epoch_rtp == 9_000
+
+    def test_an_rtp_jump_discards_the_partial_cpi_and_starts_a_new_epoch(self):
+        src = _small()
+        _feed(src, 1500, chunk=500, rtp=9_000)    # CPI 0 complete, CPI 1 half full
+        # The next batch claims a later RTP than the count expects (a gap
+        # the resequencer did not fill): 20,000 samples missing.
+        q = SimpleNamespace(first_rtp_timestamp=5_000,
+                            delivered_rtp_start=9_000 + 1500 + 20_000)
+        src._on_samples(np.zeros(1000, dtype=np.complex64), q)
+        assert src.rtp_discontinuities == 1
+        items = [src._cpi_queue.get_nowait() for _ in range(src._cpi_queue.qsize())]
+        assert [(k, e) for _, k, e, _ in items] == [(0, 0), (0, 1)]
+        assert items[1][3] == 9_000 + 1500 + 20_000      # the new epoch's anchor RTP
+
+    def test_a_new_epoch_labels_from_its_own_anchor(self):
+        src = _small()
+        _feed(src, 1000, rtp=9_000)
+        q = SimpleNamespace(first_rtp_timestamp=5_000, delivered_rtp_start=50_000)
+        src._on_samples(np.zeros(2000, dtype=np.complex64), q)
+        later = ANCHOR + timedelta(hours=1)
+        anchors = {9_000: ANCHOR, 50_000: later}
+        fed = [src._cpi_queue.get_nowait() for _ in range(src._cpi_queue.qsize())]
+        fake_ci = SimpleNamespace(ssrc=7, multicast_address="239.0.0.1", port=5004)
+        fake_control = mock.Mock()
+        fake_control.ensure_channel.return_value = fake_ci
+
+        def _stream(*a, **kw):
+            for item in fed:
+                src._cpi_queue.put_nowait(item)
+            return mock.Mock()
+
+        with mock.patch.object(_stream_mod, "_ka9q_RadiodControl",
+                               return_value=fake_control, create=True), \
+             mock.patch.object(_stream_mod, "_ka9q_RadiodStream",
+                               side_effect=_stream, create=True), \
+             mock.patch.object(type(src), "_compute_anchor_utc",
+                               side_effect=lambda first_rtp=None, samples_behind=0: anchors[first_rtp]):
+            got = list(itertools.islice(iter(src), 3))
+        assert [t for _, t in got] == [ANCHOR, later, later + timedelta(seconds=1)]
+
+    def test_rtp_wrap_is_not_a_discontinuity(self):
+        src = _small()
+        _feed(src, 2000, chunk=500, rtp=2**32 - 700)
+        assert src.rtp_discontinuities == 0
+
+    def test_without_delivered_rtp_start_nothing_is_checked(self):
+        src = _small()
+        _feed(src, 2000)                          # rtp=None: older ka9q-python
+        assert src.rtp_discontinuities == 0 and src._epoch == 0
+
+    def test_label_uses_samples_not_cpi_seconds(self):
+        # 1000.5 Hz x 1 s: N = round(1000.5) = 1000 samples, so CPI k starts
+        # at k * 1000 / 1000.5 s, not k * 1 s.
+        src = _src(sample_rate_hz=1000.5, cpi_seconds=1.0)
+        _feed(src, 3000)
+        got = _iterate_prefilled(src, 3)
+        assert got[2][1] == ANCHOR + timedelta(seconds=2 * 1000 / 1000.5)
+
