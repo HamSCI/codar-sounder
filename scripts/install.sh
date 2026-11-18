@@ -201,7 +201,7 @@ mkdir -p "$CONFIG_DIR"
 # A station migrated to per-receiver instances keeps one
 # $CONFIG_DIR/<reporter-key>.toml each and no shared config; rendering the
 # template again would bring back a shared config nobody configured.
-PER_INSTANCE=$("$VENV_DIR/bin/python3" -c "
+PER_INSTANCE=$("$VENV_DIR/bin/python3" -I -c "
 from codar_sounder.config import per_instance_config_paths
 print(' '.join(p.name for p in per_instance_config_paths()))
 " 2>/dev/null || true)
