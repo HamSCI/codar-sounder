@@ -18,7 +18,9 @@ from importlib.metadata import version as pkg_version
 from pathlib import Path
 from typing import Any
 
+from codar_sounder._reporter_id import to_key
 from codar_sounder.config import (
+    extract_reporter_id,
     haversine_km,
     missing_tx_fields,
     radiod_block_errors,
@@ -56,6 +58,11 @@ def build_inventory(config: dict, config_path: Path) -> dict:
 
     instances: list[dict] = []
     all_log_paths: dict[str, Any] = {}
+    # A per-receiver config names its reporter; its unit is
+    # codar-sounder@<key> and logs to <log_dir>/<key>.log.  A legacy shared
+    # config runs codar-sounder@<radiod> and logs to <log_dir>/<radiod>.log.
+    reporter_id = extract_reporter_id(config)
+    unit_key = _unit_key(reporter_id)
 
     for block in radiod_blocks(config):
         # Phase 6 cutover (RADIOD-IDENTIFICATION.md §3.1): the mDNS
@@ -120,11 +127,12 @@ def build_inventory(config: dict, config_path: Path) -> dict:
                 # alignment) remains a separate, future concern
                 # (REQUIREMENTS CDR-F-092); this field does not claim it.
                 "timing_authority_applied": timing_authority_applied,
+                "reporter_id": reporter_id,
             }
             instances.append(instance)
 
             all_log_paths[f"{radiod_id}/{tx_id}"] = {
-                "process": f"{log_dir}/{radiod_id}.log",
+                "process": f"{log_dir}/{unit_key or radiod_id}.log",
                 "products": f"{output_dir}/{radiod_id}/{tx_id}",
             }
 
@@ -157,6 +165,16 @@ def build_inventory(config: dict, config_path: Path) -> dict:
     return payload
 
 
+def _unit_key(reporter_id):
+    """The instance key of a reporter id (AC0G/B1A -> AC0G-B1A), or None."""
+    if not reporter_id:
+        return None
+    try:
+        return to_key(reporter_id)
+    except ValueError:
+        return None
+
+
 def build_validate(config: dict, config_path: Path | None = None) -> dict:
     """Build the validate --json payload per contract v0.8 §12."""
     issues = _collect_issues(config)
@@ -172,6 +190,14 @@ def build_validate(config: dict, config_path: Path | None = None) -> dict:
 def _collect_issues(config: dict) -> list[dict]:
     """Run validation checks and return a list of issue dicts."""
     issues: list[dict] = []
+
+    reporter_id = extract_reporter_id(config)
+    if reporter_id and _unit_key(reporter_id) is None:
+        issues.append({
+            "severity": "fail", "instance": "all",
+            "message": f"[instance] reporter_id {reporter_id!r} is not a "
+                       f"reporter id (e.g. AC0G/B1A)",
+        })
 
     station = config.get("station", {})
     if not station.get("callsign"):

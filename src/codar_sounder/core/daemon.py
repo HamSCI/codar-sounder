@@ -447,13 +447,16 @@ _OWN_WRITER = object()
 def _make_sigmondb_emitter(reporter_id, config=None):
     """The sigmondb row emitter on the local sink (core/sigmondb.py).
 
-    The rows leave reporter_id empty on purpose: sigmondb's ingest files an
-    empty one under the uploading site, and refuses one whose callsign
-    differs from the site's.  KFS-MAIN uploads for KFS-OMNI's radiod, so a
-    per-radiod reporter id would lose every row.  The radiod travels in
-    engineering instead."""
+    Every row (arrival, capture) carries the reporter id of the receiver
+    that heard it: the instance's ``[instance] reporter_id``.  A receiver
+    (antenna + RX888 + radiod) is the data source; a transporter that runs
+    this instance for a receiver on another machine (AC0G-B2, KFS-MAIN)
+    only sends the upload and never names the rows
+    (tasks/transporter-reporters/2026-11-18-design.md).  A legacy shared
+    config has no [instance] block, so ``reporter_id`` is None and the rows
+    keep an empty reporter: sigmondb's ingest files those under the
+    uploading site, as before.  The radiod still travels in engineering."""
     from codar_sounder import __version__
-    del reporter_id
     try:
         from codar_sounder.core import sigmondb
     except ImportError as exc:
@@ -465,7 +468,7 @@ def _make_sigmondb_emitter(reporter_id, config=None):
         cfg.get("paths", {}).get("output_dir", "/var/lib/codar-sounder"),
         keep_days=int(cfg.get("processing", {}).get("phase_series_days",
                                                     sigmondb.PHASE_KEEP_DAYS)))
-    return sigmondb.Emitter(sigmondb.make_writers(), reporter_id="",
+    return sigmondb.Emitter(sigmondb.make_writers(), reporter_id=reporter_id or "",
                             detector_version=f"codar-sounder/{__version__}",
                             phase_store=store)
 

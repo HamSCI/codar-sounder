@@ -176,10 +176,10 @@ tasks/                    # planning notes
   now geodesic, ~0.5% off the former spherical math — immaterial to the
   50/2000 km validate thresholds).  Declared `hamsci-dsp>=0.2.0`, wired
   editable via `[tool.uv.sources]` (local sibling, not yet on PyPI).
-- **One systemd instance per radiod**
-  (`codar-sounder@<radiod_id>.service`), matching the other recorders.
-  It records every `[[radiod]]` block whose `status` names that radiod
-  (every block when no radiod-id is given): `daemon.MultiBlockDaemon`
+- **One systemd instance per receiver** (`codar-sounder@<reporter key>`,
+  below), or per radiod on a station still on the shared config
+  (`codar-sounder@<radiod_id>`).  An instance records every `[[radiod]]`
+  block of its receiver's radiod: `daemon.MultiBlockDaemon`
   runs one `SounderDaemon` (one channel) per block in its own thread,
   restarts a failed block after 30 s, and pets the watchdog only while
   at least one block has delivered a CPI within 3 × CPI.
@@ -252,10 +252,11 @@ Sections implemented:
 
 ## Production paths
 
-- Config: `/etc/codar-sounder/codar-sounder-config.toml`
+- Config: `/etc/codar-sounder/<reporter key>.toml` per receiver; legacy shared
+  `/etc/codar-sounder/codar-sounder-config.toml`
 - L1 artefact: `/var/lib/codar-sounder/<radiod_id>/<station>/YYYY/MM/DD.jsonl`
 - Sigmond sink: `/var/lib/sigmond/sink.db` (additive `codar.spots`)
-- Process log: systemd journal (`journalctl -u codar-sounder@<radiod_id>`)
+- Process log: `/var/log/codar-sounder/<instance>.log` (`codar-sounder@<instance>`)
 - Venv: `/opt/codar-sounder/venv`
 - Source: `/opt/git/sigmond/codar-sounder` (editable install)
 - Service user: `codarsnd:codarsnd`
@@ -284,25 +285,39 @@ storm-day follow-up.
 - `docs/METHODOLOGY.md` — signal-processing methodology, formulas,
   thresholds, release-by-release evolution.
 
-## Per-instance cutover (Phase 5 of sigmond multi-instance architecture)
+## One instance per receiver, keyed by reporter (2026-11-18)
 
-The systemd unit (`codar-sounder@%i.service`) now passes
-`--instance %i` to the daemon (alongside the existing `--radiod-id %i`).
-`config.resolve_config_path()` prefers `/etc/codar-sounder/<instance>.toml`
-when it exists; otherwise falls back to the legacy shared
-`codar-sounder-config.toml` with a one-line `DeprecationWarning`.
+A receiver (antenna + RX888 + radiod) names every row it produces; a
+transporter that runs codar-sounder for receivers on another machine
+(AC0G-B2 for B1A/B1B, KFS-MAIN) only sends the upload
+(`~/hamsci/tasks/transporter-reporters/2026-11-18-design.md`).  So such a
+station runs one instance per receiver:
 
-Until operators run `sudo smd instance migrate` (sigmond Phase 8),
-the per-instance config doesn't exist and existing deployments
-keep running unchanged.  After migration, the per-instance config
-holds an `[instance]` block with `reporter_id = "AC0G-CODAR"` (or
-similar reporter-keyed name); the daemon stops emitting the
-deprecation warning.
+- Unit `codar-sounder@AC0G-B1A` (the reporter key: `/` and `=` become `-`).
+  The unit passes `--instance %i --radiod-id %i`; `%i` is the key.
+- Config `/etc/codar-sounder/AC0G-B1A.toml`: `[instance] reporter_id =
+  "AC0G/B1A"` plus the full config (`[station]`, `[paths]`, `[processing]`)
+  and only that receiver's `[[radiod]]` blocks (`status` = its radiod).
+  The daemon records every block in the file; `--radiod-id AC0G-B1A`
+  matches none and is ignored.
+- Env file `/etc/codar-sounder/env/AC0G-B1A.env` (optional).
+- Every sigmondb row (arrival, capture) and every `codar.spots` row
+  carries `AC0G/B1A`.  Output stays keyed by radiod
+  (`/var/lib/codar-sounder/<radiod>/...`); the process log is
+  `/var/log/codar-sounder/AC0G-B1A.log`.
+- `codar-sounder config init --non-interactive --instance AC0G-B1A
+  --reporter-id AC0G/B1A --radiod-status <radiod> [--max-centres N]`
+  writes that file (env fallbacks: `SIGMOND_INSTANCE`,
+  `STATION_REPORTER_ID` only when its key is the instance's,
+  `SIGMOND_RADIOD_STATUS`, `CODAR_MAX_CENTRES`).  It refuses rather than
+  guess the receiver's reporter or radiod.
+- `inventory`/`validate` take `--instance`; with no shared config they
+  report every per-receiver file (`config_paths`).
 
-Spot rows now carry a first-class `reporter_id` field — derived
-from the per-instance config's `[instance]` block when present,
-falling back to `radiod_id` (matching the existing `instance`
-field's semantic) for legacy single-instance deployments.
+Legacy, until sigmond migrates a station: `codar-sounder@<radiod status>`
+reads the shared `codar-sounder-config.toml` (a `DeprecationWarning`), and
+its sigmondb rows keep an empty reporter, which the server files under the
+uploading site.
 
 See `/opt/git/sigmond/sigmond/docs/MULTI-INSTANCE-ARCHITECTURE.md`
 for the architecture and phase plan.

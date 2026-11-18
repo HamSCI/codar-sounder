@@ -29,18 +29,97 @@ _TEMPLATE = _REPO / "config" / "codar-sounder-config.toml.template"
 _WIZARD_PATH = _REPO / "scripts" / "config-wizard.sh"
 
 
+def _target(args) -> Path:
+    """--config, else the --instance file (a reporter-keyed instance, or
+    one whose file exists), else the legacy shared config."""
+    if getattr(args, "config", None):
+        return Path(args.config)
+    instance = getattr(args, "instance", None)
+    if instance:
+        from codar_sounder.config import (
+            is_reporter_instance, per_instance_config_path)
+        path = per_instance_config_path(instance)
+        if is_reporter_instance(instance) or path.exists():
+            return path
+    return DEFAULT_CONFIG_PATH
+
+
+def _instance_init(args):
+    """The receiver this init configures, or None for the shared config.
+
+    An instance keyed by reporter (``--instance``, else ``SIGMOND_INSTANCE``;
+    AC0G-B1A) gets its own file, /etc/codar-sounder/<key>.toml, holding
+    ``[instance] reporter_id`` and only that receiver's radiod blocks
+    (tasks/transporter-reporters/2026-11-18-design.md).  A radiod-keyed
+    instance (bee1-status.local) or none keeps the legacy shared config.
+
+    Returns (key, reporter_id, radiod_status) or None; raises ValueError
+    when the receiver's reporter or radiod is unknown.  The reporter is
+    ``--reporter-id``, else ``STATION_REPORTER_ID`` when its key is this
+    instance's (a single-receiver station).  On a transporter the station's
+    reporter names the sender, not this receiver, so it never stands in for
+    another key.  The radiod is ``--radiod-status``, else
+    ``SIGMOND_RADIOD_STATUS``."""
+    from codar_sounder._reporter_id import display, to_key, to_storage
+    from codar_sounder.config import is_reporter_instance
+    instance = (getattr(args, "instance", None)
+                or os.environ.get("SIGMOND_INSTANCE", "")).strip()
+    if not is_reporter_instance(instance):
+        return None
+    key = to_key(instance)
+    rid = (getattr(args, "reporter_id", None) or "").strip()
+    if not rid:
+        station = os.environ.get("STATION_REPORTER_ID", "").strip()
+        try:
+            if station and to_key(station) == key:
+                rid = station
+        except ValueError:
+            pass
+    if not rid:
+        raise ValueError(
+            f"instance {key}: no reporter id for this receiver; pass "
+            f"--reporter-id (STATION_REPORTER_ID names another key)")
+    if to_key(rid) != key:
+        raise ValueError(f"reporter {rid!r} has key {to_key(rid)}, "
+                         f"not this instance's {key}")
+    status = (getattr(args, "radiod_status", None)
+              or os.environ.get("SIGMOND_RADIOD_STATUS", "")).strip()
+    if not status:
+        raise ValueError(
+            f"instance {key}: no radiod for this receiver; pass "
+            f"--radiod-status or set SIGMOND_RADIOD_STATUS")
+    return key, display(to_storage(rid)), status
+
+
+def _write_instance_block(target: Path, reporter_id: str) -> None:
+    """Give the file its [instance] reporter_id (rewrites it as TOML)."""
+    with open(target, "rb") as f:
+        cfg = tomllib.load(f)
+    inst = dict(cfg.get("instance") or {})
+    inst["reporter_id"] = reporter_id
+    cfg["instance"] = inst
+    target.write_text(_serialize_toml(cfg), encoding="utf-8")
+
+
 def cmd_config_init(args) -> int:
     """Dispatch to the whiptail picker when available; else copy template."""
+    try:
+        inst = _instance_init(args)
+    except ValueError as exc:
+        print(f"codar-sounder: config init refused: {exc}", file=sys.stderr)
+        return 1
+    if inst is not None:
+        return _instance_config_init(args, *inst)
     if not getattr(args, "non_interactive", False) and _wizard_available(args):
         # Ensure a file exists for the wizard's `config show` prefill /
         # `config apply` merge target.  Idempotent; respects --reconfig.
-        target = Path(getattr(args, "config", None) or DEFAULT_CONFIG_PATH)
+        target = _target(args)
         if not target.exists() or bool(getattr(args, "reconfig", False)):
             rv = _legacy_config_init(args)
             if rv != 0:
                 return rv
         return _exec_wizard(args, "init")
-    target = Path(getattr(args, "config", None) or DEFAULT_CONFIG_PATH)
+    target = _target(args)
     # The picker writes only a fresh file, one --reconfig asked for, or the
     # template install.sh left (its radiod still the placeholder).  A config
     # that names a real radiod is somebody's choice (W2NAF, UACNJ, AC0G/ND
@@ -51,6 +130,33 @@ def cmd_config_init(args) -> int:
     if rv == 0 and pick:
         rv = _unattended_pick(args)
     return rv
+
+
+def _instance_config_init(args, key: str, reporter_id: str,
+                          radiod_status: str) -> int:
+    """Write one receiver's file: the template, its [instance] block, and the
+    nearest transmitters on that receiver's radiod alone.  An existing file
+    that names a real radiod stays as it is, unless --reconfig."""
+    from codar_sounder.config import PER_INSTANCE_CONFIG_DIR
+    target = Path(getattr(args, "config", None)
+                  or PER_INSTANCE_CONFIG_DIR / f"{key}.toml")
+    args.config = target
+    reconfig = bool(getattr(args, "reconfig", False))
+    fresh = not target.exists() or reconfig or _is_unconfigured(target)
+    if not fresh:
+        print(f"codar-sounder: config exists at {target}; use --reconfig to overwrite")
+        return 0
+    if not _TEMPLATE.exists():
+        print(f"codar-sounder: template missing: {_TEMPLATE}")
+        return 1
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy(str(_TEMPLATE), str(target))
+    _write_instance_block(target, reporter_id)
+    print(f"codar-sounder: wrote {target} (reporter {reporter_id}, "
+          f"radiod {radiod_status})")
+    if not getattr(args, "non_interactive", False) and _wizard_available(args):
+        return _exec_wizard(args, "init")
+    return _unattended_pick(args, statuses=[radiod_status])
 
 
 _PLACEHOLDER_STATUS = "<configure-via-config-init>"
@@ -101,17 +207,22 @@ def _sigmond_radiods(env, coordination_env: Optional[Path] = None) -> list:
     return sorted({v.strip().strip('"') for v in pairs.values() if v.strip()})
 
 
-def _unattended_pick(args) -> int:
+def _unattended_pick(args, statuses: Optional[list] = None) -> int:
     """Under sigmond, replace the template's worked example with the nearest
     transmitters, capped at ``CODAR_MAX_CENTRES`` channels (Michael,
     2026-11-12: codar-sounder is a core client, so bringup must leave it
     recording).  sigmond sets ``SIGMOND_RADIOD_COUNT`` on every init it
     drives.  Without sigmond, or without the station's coordinates and
-    radiod, the template stays for the operator to finish."""
+    radiod, the template stays for the operator to finish.
+
+    ``statuses`` names the radiods to record (one receiver's init); without
+    it, every radiod sigmond binds.  ``--max-centres`` beats
+    ``CODAR_MAX_CENTRES``: sigmond's sudo elevation drops that variable."""
     env = os.environ
-    if "SIGMOND_RADIOD_COUNT" not in env:
-        return 0
-    statuses = _sigmond_radiods(env)
+    if statuses is None:
+        if "SIGMOND_RADIOD_COUNT" not in env:
+            return 0
+        statuses = _sigmond_radiods(env)
     if not statuses:
         return 0
     try:
@@ -127,10 +238,12 @@ def _unattended_pick(args) -> int:
             print("codar-sounder: no STATION_LAT/STATION_LON or STATION_GRID; "
                   "transmitters not chosen — run `smd config init codar-sounder` to pick")
             return 0
-    try:
-        cap = int(env.get("CODAR_MAX_CENTRES", DEFAULT_MAX_CENTRES))
-    except ValueError:
-        cap = DEFAULT_MAX_CENTRES
+    cap = getattr(args, "max_centres", None)
+    if cap is None:
+        try:
+            cap = int(env.get("CODAR_MAX_CENTRES", DEFAULT_MAX_CENTRES))
+        except ValueError:
+            cap = DEFAULT_MAX_CENTRES
     from codar_sounder.core.stations import (
         SAMPLE_RATES_HZ, audible_transmitters, pick_centres)
     # A channel holds at most the largest rate's bandwidth; a wider sweep
@@ -156,7 +269,7 @@ def _unattended_pick(args) -> int:
         else:
             merged[hz] = list(centres[hz])
     centres = merged
-    target = Path(getattr(args, "config", None) or DEFAULT_CONFIG_PATH)
+    target = _target(args)
     with open(target, "rb") as f:
         cfg = tomllib.load(f)
     station = dict(cfg.get("station") or {})
@@ -194,7 +307,7 @@ def _unattended_pick(args) -> int:
 
 
 def _legacy_config_init(args) -> int:
-    target = Path(getattr(args, "config", None) or DEFAULT_CONFIG_PATH)
+    target = _target(args)
     reconfig = bool(getattr(args, "reconfig", False))
 
     if target.exists() and not reconfig:
@@ -260,7 +373,7 @@ def _discover_radiods(timeout: float = 5.0) -> list[dict]:
 
 
 def cmd_config_edit(args) -> int:
-    target = Path(getattr(args, "config", None) or DEFAULT_CONFIG_PATH)
+    target = _target(args)
     if not target.exists():
         print(f"codar-sounder: no config at {target}; run `codar-sounder config init` first")
         return 1
@@ -336,8 +449,8 @@ def _exec_wizard(args, mode: str) -> int:
         "CODAR_SOUNDER_CLI": sys.argv[0],
     }
     extra_args = [mode]
-    config_arg = getattr(args, "config", None)
-    if config_arg:
+    config_arg = _target(args)
+    if config_arg != DEFAULT_CONFIG_PATH:
         extra_args += ["--config", str(config_arg)]
 
     if _sigmond_wd is not None:
@@ -419,7 +532,7 @@ def cmd_config_show(args) -> int:
     this: keys not in the file simply don't appear in the form, which
     is the expected behavior for the edit-existing flow.
     """
-    config_path = Path(getattr(args, "config", None) or DEFAULT_CONFIG_PATH)
+    config_path = _target(args)
     if not config_path.is_file():
         out: dict = {}
     else:
@@ -442,7 +555,7 @@ def cmd_config_apply(args) -> int:
     a table, except `radiod` which is a list of tables).  No per-key
     type enforcement — sigmond's wizard owns input typing on its end.
     """
-    config_path = Path(getattr(args, "config", None) or DEFAULT_CONFIG_PATH)
+    config_path = _target(args)
 
     try:
         payload = json.load(sys.stdin)

@@ -70,13 +70,20 @@ def main():
         p.add_argument("--log-level", default=None,
                        help="Override log level (DEBUG/INFO/WARNING/ERROR)")
 
+    def _instance(p):
+        p.add_argument("--instance", default=None,
+                       help="Receiver instance, keyed by reporter (AC0G-B1A): "
+                            "reads /etc/codar-sounder/<instance>.toml")
+
     p_inv = sub.add_parser("inventory", help="Contract v0.7 §3 inventory")
     p_inv.add_argument("--json", action="store_true", default=True)
     _common(p_inv)
+    _instance(p_inv)
 
     p_val = sub.add_parser("validate", help="Contract v0.7 §12 validation")
     p_val.add_argument("--json", action="store_true", default=True)
     _common(p_val)
+    _instance(p_val)
 
     p_ver = sub.add_parser("version", help="Version + git provenance")
     p_ver.add_argument("--json", action="store_true", default=True)
@@ -118,6 +125,7 @@ def main():
              "SNRs (typical TDMA peaks are 20–40 dB; 5 dB is noise).",
     )
     _common(p_tdma)
+    _instance(p_tdma)
 
     p_stn = sub.add_parser(
         "stations",
@@ -136,6 +144,7 @@ def main():
     p_stn.add_argument("--json", action="store_true",
                        help="Emit JSON instead of a human-readable table")
     _common(p_stn)
+    _instance(p_stn)
 
     p_cfg = sub.add_parser("config", help="Configure codar-sounder")
     cfg_sub = p_cfg.add_subparsers(dest="config_command")
@@ -144,11 +153,26 @@ def main():
                         help="overwrite existing config")
     p_init.add_argument("--non-interactive", action="store_true",
                         help="use env-var defaults, do not prompt")
+    p_init.add_argument("--instance", default=None,
+                        help="receiver instance keyed by reporter (AC0G-B1A); "
+                             "writes /etc/codar-sounder/<instance>.toml with "
+                             "[instance] reporter_id and only that receiver's "
+                             "radiod (default: $SIGMOND_INSTANCE)")
+    p_init.add_argument("--reporter-id", default=None,
+                        help="the receiver's reporter id (AC0G/B1A); default "
+                             "$STATION_REPORTER_ID when its key is the instance")
+    p_init.add_argument("--radiod-status", default=None,
+                        help="the receiver's radiod status name; default "
+                             "$SIGMOND_RADIOD_STATUS")
+    p_init.add_argument("--max-centres", type=int, default=None,
+                        help="channels (centre frequencies) an unattended "
+                             "init records (default $CODAR_MAX_CENTRES, else 2)")
     _common(p_init)
     p_edit = cfg_sub.add_parser("edit", help="review/update existing config")
     p_edit.add_argument("--non-interactive", action="store_true")
     p_edit.add_argument("--radiod-id", default=None)
     _common(p_edit)
+    _instance(p_edit)
 
     # CLIENT-CONTRACT §14 JSON-roundtrip surface.  Sigmond's in-TUI
     # Textual config wizard requires `show --json` + `apply --json -`;
@@ -159,6 +183,7 @@ def main():
     p_show.add_argument("--defaults", action="store_true",
                         help="(accepted for forward-compat; currently a no-op)")
     _common(p_show)
+    _instance(p_show)
 
     p_apply = cfg_sub.add_parser("apply",
                                  help="apply a JSON payload (stdin) to the config")
@@ -166,6 +191,7 @@ def main():
     p_apply.add_argument("input", nargs="?", default="-",
                          help="JSON payload path or `-` for stdin (default)")
     _common(p_apply)
+    _instance(p_apply)
 
     args = parser.parse_args()
 
@@ -194,57 +220,99 @@ def main():
 
 
 def _resolved_config_path(args) -> Path:
-    return args.config or Path(
-        os.environ.get("CODAR_SOUNDER_CONFIG",
-                       "/etc/codar-sounder/codar-sounder-config.toml")
-    )
+    """--config, else $CODAR_SOUNDER_CONFIG, else the --instance file, else
+    the legacy shared config.  An --instance names that receiver's file
+    only: no fallback to the shared config."""
+    if getattr(args, "config", None):
+        return args.config
+    env = os.environ.get("CODAR_SOUNDER_CONFIG")
+    if env:
+        return Path(env)
+    instance = getattr(args, "instance", None)
+    if instance:
+        from codar_sounder.config import per_instance_config_path
+        return per_instance_config_path(instance)
+    from codar_sounder.config import DEFAULT_CONFIG_PATH
+    return DEFAULT_CONFIG_PATH
+
+
+def _contract_config_paths(args) -> list:
+    """The configs inventory and validate report on.  One path when the
+    caller names one (--config, $CODAR_SOUNDER_CONFIG, --instance) or the
+    legacy shared config exists.  On a station migrated to per-receiver
+    instances (no shared config), every /etc/codar-sounder/<instance>.toml."""
+    path = _resolved_config_path(args)
+    named = (getattr(args, "config", None) or getattr(args, "instance", None)
+             or os.environ.get("CODAR_SOUNDER_CONFIG"))
+    if named or path.exists():
+        return [path]
+    from codar_sounder.config import per_instance_config_paths
+    return per_instance_config_paths() or [path]
 
 
 def _handle_inventory(args):
     from codar_sounder.config import load_config
     from codar_sounder.contract import CONTRACT_VERSION, build_inventory
 
-    config_path = _resolved_config_path(args)
-    try:
-        config = load_config(config_path)
-    except FileNotFoundError:
-        payload = {
-            "client": "codar-sounder",
-            "version": "0.1.0",
-            "contract_version": CONTRACT_VERSION,
-            "config_path": str(config_path),
-            "instances": [],
-            "issues": [{
-                "severity": "fail", "instance": "all",
-                "message": f"config not found: {config_path}",
-            }],
-        }
-        print(json.dumps(payload, indent=2))
-        return
-    payload = build_inventory(config, config_path)
-    print(json.dumps(payload, indent=2))
+    paths = _contract_config_paths(args)
+    payloads = []
+    for config_path in paths:
+        try:
+            config = load_config(config_path)
+        except FileNotFoundError:
+            payloads.append({
+                "client": "codar-sounder",
+                "version": "0.1.0",
+                "contract_version": CONTRACT_VERSION,
+                "config_path": str(config_path),
+                "instances": [],
+                "issues": [{
+                    "severity": "fail", "instance": "all",
+                    "message": f"config not found: {config_path}",
+                }],
+            })
+            continue
+        payloads.append(build_inventory(config, config_path))
+    print(json.dumps(_merge_payloads(payloads), indent=2))
+
+
+def _merge_payloads(payloads: list) -> dict:
+    """One payload from one per config.  The first carries the header;
+    instances, issues and log paths add up; config_paths lists them all."""
+    if len(payloads) == 1:
+        return payloads[0]
+    out = dict(payloads[0])
+    out["config_paths"] = [p["config_path"] for p in payloads]
+    for key in ("instances", "issues"):
+        out[key] = [item for p in payloads for item in p.get(key, [])]
+    if any("log_paths" in p for p in payloads):
+        out["log_paths"] = {k: v for p in payloads
+                            for k, v in p.get("log_paths", {}).items()}
+    if any("ok" in p for p in payloads):
+        out["ok"] = all(p.get("ok", True) for p in payloads)
+    return out
 
 
 def _handle_validate(args):
     from codar_sounder.config import load_config
     from codar_sounder.contract import build_validate
 
-    config_path = _resolved_config_path(args)
-    try:
-        config = load_config(config_path)
-    except FileNotFoundError:
-        payload = {
-            "ok": False,
-            "config_path": str(config_path),
-            "issues": [{
-                "severity": "fail", "instance": "all",
-                "message": f"config not found: {config_path}",
-            }],
-        }
-        print(json.dumps(payload, indent=2))
-        sys.exit(1)
-        return
-    payload = build_validate(config, config_path)
+    payloads = []
+    for config_path in _contract_config_paths(args):
+        try:
+            config = load_config(config_path)
+        except FileNotFoundError:
+            payloads.append({
+                "ok": False,
+                "config_path": str(config_path),
+                "issues": [{
+                    "severity": "fail", "instance": "all",
+                    "message": f"config not found: {config_path}",
+                }],
+            })
+            continue
+        payloads.append(build_validate(config, config_path))
+    payload = _merge_payloads(payloads)
     print(json.dumps(payload, indent=2))
     if not payload["ok"]:
         sys.exit(1)
@@ -263,46 +331,26 @@ def _handle_daemon(args):
     _install_sighup_handler()
     from codar_sounder.config import (
         extract_reporter_id, load_config, resolve_config_path,
-        resolve_radiod_blocks,
     )
     from codar_sounder.core.daemon import MultiBlockDaemon
 
-    # Phase-5 cutover (sigmond MULTI-INSTANCE-ARCHITECTURE.md §4):
-    # prefer per-instance config when --instance is given and the file
-    # exists; fall back to legacy shared config with DeprecationWarning.
-    instance = getattr(args, "instance", None)
+    # Per-instance config first (sigmond MULTI-INSTANCE-ARCHITECTURE.md §4):
+    # /etc/codar-sounder/<instance>.toml when it exists, else the legacy
+    # shared config with a DeprecationWarning.
+    instance = _unescape(getattr(args, "instance", None))
+    radiod_id = _unescape(args.radiod_id)
     config_path = resolve_config_path(
         instance=instance,
         explicit_path=args.config,
     )
     config = load_config(config_path)
-    try:
-        blocks = resolve_radiod_blocks(config, args.radiod_id)
-    except ValueError:
-        # Post-`smd instance migrate` soft-cutover: the systemd
-        # template still passes --radiod-id %i (= reporter ID),
-        # which doesn't match the [[radiod]] block's id (= mDNS
-        # source label) in the per-instance config.  When --instance
-        # was given the per-instance config defines this instance's
-        # source unambiguously; fall through to None (every block in
-        # the file).  Warn so the mismatch stays visible.  Legacy
-        # multi-radiod shared configs (no --instance) keep strict id
-        # matching.
-        if args.radiod_id is None or instance is None:
-            raise
-        logging.getLogger("codar_sounder.daemon").warning(
-            "--radiod-id=%r did not match any [[radiod]] block in %s "
-            "(--instance=%r); falling through to every block in the "
-            "per-instance config.  Drop --radiod-id from the systemd "
-            "template once all reporters are migrated.",
-            args.radiod_id, config_path, instance,
-        )
-        blocks = resolve_radiod_blocks(config, None)
-
-    # Per-instance reporter_id from [instance] block; None during the
-    # cutover (legacy shared config has no such block).  Row-construction
-    # layer falls back to radiod_id when reporter_id is None.
-    reporter_id = extract_reporter_id(config_path)
+    # The instance's reporter id, from its [instance] block.  None for a
+    # legacy shared config: its rows keep an empty sigmondb reporter (the
+    # server files them under the uploading site) and codar.spots falls
+    # back to radiod_id.
+    reporter_id = extract_reporter_id(config)
+    blocks = _daemon_blocks(config, config_path, radiod_id, instance,
+                            reporter_id)
 
     log = logging.getLogger("codar_sounder.daemon")
     log.info(
@@ -310,7 +358,7 @@ def _handle_daemon(args):
         "(config=%s, reporter_id=%s)",
         ",".join(sorted({b.get("status", "<unconfigured>") for b in blocks})),
         len(blocks), config_path,
-        reporter_id or "<derived from radiod_id at row time>",
+        reporter_id or "<none: legacy shared config>",
     )
 
     try:
@@ -319,6 +367,54 @@ def _handle_daemon(args):
         log.error("refusing to start: %s", exc)
         sys.exit(2)
     daemon.run()
+
+
+def _unescape(name):
+    """%i keeps systemd's spelling (AC0G\\x3dB1A); read it as the name."""
+    if not name:
+        return name
+    from codar_sounder._reporter_id import unescape_systemd_instance
+    return unescape_systemd_instance(name)
+
+
+def _daemon_blocks(config, config_path, radiod_id, instance, reporter_id):
+    """The [[radiod]] blocks this daemon records.
+
+    A per-receiver config (its [instance] block names a reporter) holds only
+    that receiver's blocks, so it records all of them; the unit's
+    --radiod-id %i then carries the reporter key (AC0G-B1A), not a radiod,
+    and selects nothing.  It still narrows the blocks when it does name one
+    of the config's radiods.  A legacy shared config keeps strict matching:
+    --radiod-id picks the blocks of that radiod (codar-sounder@<radiod>).
+    """
+    from codar_sounder.config import radiod_blocks, resolve_radiod_blocks
+    log = logging.getLogger("codar_sounder.daemon")
+    if reporter_id:
+        blocks = radiod_blocks(config)
+        if not blocks:
+            raise ValueError(f"config {config_path} has no [[radiod]] blocks")
+        if radiod_id is not None:
+            named = [b for b in blocks if b.get("status") == radiod_id]
+            if named:
+                return named
+        return blocks
+    try:
+        return resolve_radiod_blocks(config, radiod_id)
+    except ValueError:
+        # A per-instance file without an [instance] block, started by a
+        # reporter-keyed unit: the file still names this instance's
+        # radiod, so record every block in it.  Warn: the file should
+        # carry [instance] reporter_id.  A legacy shared config started
+        # without --instance keeps strict matching.
+        if radiod_id is None or instance is None:
+            raise
+        log.warning(
+            "--radiod-id=%r did not match any [[radiod]] block in %s "
+            "(--instance=%r); recording every block in it.  Give the "
+            "file an [instance] reporter_id.",
+            radiod_id, config_path, instance,
+        )
+        return resolve_radiod_blocks(config, None)
 
 
 def _handle_tdma_scan(args):

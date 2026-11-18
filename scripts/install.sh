@@ -198,7 +198,16 @@ ui_info "Post-install verify OK"
 
 # --- Phase 3: config ---
 mkdir -p "$CONFIG_DIR"
-if [[ ! -f "$CONFIG_FILE" ]]; then
+# A station migrated to per-receiver instances keeps one
+# $CONFIG_DIR/<reporter-key>.toml each and no shared config; rendering the
+# template again would bring back a shared config nobody configured.
+PER_INSTANCE=$("$VENV_DIR/bin/python3" -c "
+from codar_sounder.config import per_instance_config_paths
+print(' '.join(p.name for p in per_instance_config_paths()))
+" 2>/dev/null || true)
+if [[ ! -f "$CONFIG_FILE" && -n "$PER_INSTANCE" ]]; then
+    ui_info "Per-receiver configs in $CONFIG_DIR ($PER_INSTANCE); no shared config rendered"
+elif [[ ! -f "$CONFIG_FILE" ]]; then
     ui_info "Rendering config template -> $CONFIG_FILE"
     cp "$REPO_SOURCE/config/codar-sounder-config.toml.template" "$CONFIG_FILE"
     ui_warn "Edit $CONFIG_FILE: callsign, grid, receiver_lat/lon, [[radiod]] + [[radiod.transmitter]] blocks"
@@ -220,7 +229,8 @@ install -o root -g root -m 644 \
 systemctl daemon-reload
 
 ui_info "Install complete. Edit $CONFIG_FILE then enable an instance with:"
-ui_info "  sudo systemctl enable --now codar-sounder@<radiod-id>"
+ui_info "  sudo systemctl enable --now codar-sounder@<reporter-key>   (per-receiver config)"
+ui_info "  sudo systemctl enable --now codar-sounder@<radiod-status>   (legacy shared config)"
 ui_info ""
 ui_info "Note: v0.1 daemon is a stub — it idles and logs what it WOULD dechirp."
 ui_info "Signal-processing engine (FMCW dechirping per Kaeppler 2022) lands in v0.2."
