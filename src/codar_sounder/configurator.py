@@ -35,6 +35,15 @@ def _target(args) -> Path:
     if getattr(args, "config", None):
         return Path(args.config)
     instance = getattr(args, "instance", None)
+    if not instance:
+        # sigmond names the instance in the env (smd config edit <client>
+        # <instance>); only an existing per-receiver file takes it, so a
+        # station on the shared config is untouched.
+        env_instance = os.environ.get("SIGMOND_INSTANCE", "").strip()
+        if env_instance:
+            from codar_sounder.config import per_instance_config_path as _pic
+            if _pic(env_instance).exists():
+                instance = env_instance
     if instance:
         from codar_sounder.config import (
             is_reporter_instance, per_instance_config_path)
