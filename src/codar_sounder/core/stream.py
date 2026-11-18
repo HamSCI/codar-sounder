@@ -24,7 +24,11 @@ moment of the first sample in that CPI.
 The radiod backend derives ``cpi_start_utc`` from the RTP sample
 counter plus an optional hf-timestd ``rtp_to_utc_offset_ns``, per
 METROLOGY.md §4.5 RTP-reference labeling invariant — no wall-clock
-read per CPI, no shadow timing diagnostics.  The synthetic backend
+read per CPI, no shadow timing diagnostics.  Each CPI carries its own
+position in the sample stream, so a CPI dropped because the consumer
+fell behind costs that CPI only, never the labels after it (W2NAF,
+2026-11-18: dropped chunks under the old yield count put labels hours
+early).  The synthetic backend
 labels each CPI with ``datetime.now(timezone.utc)`` since it has no
 authoritative time source; that's fine for tests and dry-runs.
 """
@@ -168,6 +172,13 @@ class SyntheticIQSource:
 class RadiodIQSource:
     """Subscribe to a radiod IQ channel via ka9q-python.
 
+    Timing: CPI ``k`` holds stream samples ``[k*N, (k+1)*N)`` counted from
+    the first delivered sample (ka9q-python zero-fills lost packets, so the
+    count follows radiod's sample clock) and is labelled
+    ``anchor + k * cpi_seconds``.  A CPI the consumer has no room for is
+    dropped whole and counted in ``dropped_cpis``; the labels after it stay
+    true.
+
     On entry, calls ``RadiodControl.ensure_channel()`` to *provision*
     the channel (radiod has runtime channel control via its multicast
     control plane — no radiod restart needed).  Then attaches a
@@ -242,10 +253,14 @@ class RadiodIQSource:
         self._control = None
         self._stream = None
         self._channel_info = None
-        # Bounded queue: ka9q delivers ~30 ms batches at 64 kHz × s16.
-        # 64 entries ≈ 2 s of buffering — enough for jitter, not enough
-        # to occlude a real backlog.
-        self._sample_queue: "_q.Queue[np.ndarray]" = _q.Queue(maxsize=64)
+        # CPIs assemble here, in ka9q's callback thread, which runs
+        # continuously; the queue hands finished CPIs to the consumer.
+        # The old design queued ~2 s of raw chunks and drained them only
+        # when the consumer asked for its next CPI, so every chunk that
+        # arrived while it processed one was dropped.
+        self._cpi_queue: "_q.Queue[Tuple[np.ndarray, int]]" = _q.Queue(
+            maxsize=self.CPI_QUEUE_MAX)
+        self._reset_assembly()
         self._stopped = threading.Event()
         # Anchor state for RTP-derived CPI timestamps (METROLOGY.md §4.5
         # RTP-reference invariant).  Captured on the first packet's
@@ -260,9 +275,26 @@ class RadiodIQSource:
         self._anchor: Optional["AnchorUTC"] = None
         self._import_ka9q()                  # raises ModuleNotFoundError if missing
 
+    # Finished CPIs waiting for the consumer: three 60 s CPIs (~92 MB at
+    # 64 kHz complex64) let one slow CPI's processing finish without a drop.
+    CPI_QUEUE_MAX = 3
+
     @property
     def cpi_n_samples(self) -> int:
         return int(round(self.sample_rate_hz * self.cpi_seconds))
+
+    def _reset_assembly(self) -> None:
+        """Start a fresh stream: no anchor packet, CPI 0, nothing queued."""
+        self._anchor_first_rtp = None
+        self._buf = np.empty(self.cpi_n_samples, dtype=np.complex64)
+        self._filled = 0
+        self._next_index = 0
+        self.dropped_cpis = 0
+        while True:
+            try:
+                self._cpi_queue.get_nowait()
+            except Exception:
+                break
 
     @property
     def anchor(self) -> Optional["AnchorUTC"]:
@@ -312,19 +344,28 @@ class RadiodIQSource:
         too_large = np.abs(arr) > 100.0
         if np.any(too_large):
             arr = np.where(too_large, np.complex64(0), arr)
-        try:
-            self._sample_queue.put_nowait(arr)
-        except Exception:
-            # Queue full → we're falling behind dechirping.  Drop oldest
-            # to keep recent samples; log once-per-CPI scale to avoid spam.
-            try:
-                self._sample_queue.get_nowait()
-                self._sample_queue.put_nowait(
-                    np.asarray(samples, dtype=np.complex64)
-                )
-                log.warning("RadiodIQSource: queue full, dropping oldest")
-            except Exception:
-                pass
+        idx = 0
+        n = self.cpi_n_samples
+        while idx < arr.size:
+            take = min(arr.size - idx, n - self._filled)
+            self._buf[self._filled:self._filled + take] = arr[idx:idx + take]
+            self._filled += take
+            idx += take
+            if self._filled == n:
+                k = self._next_index
+                try:
+                    self._cpi_queue.put_nowait((self._buf, k))
+                except Exception:
+                    # The consumer is a whole queue behind: drop this CPI.
+                    # Its successors keep their true labels.
+                    self.dropped_cpis += 1
+                    log.warning(
+                        "RadiodIQSource: CPI %d dropped, the consumer is %d CPIs "
+                        "behind (%d dropped since start); later CPIs keep their "
+                        "true times", k, self.CPI_QUEUE_MAX, self.dropped_cpis)
+                self._buf = np.empty(n, dtype=np.complex64)
+                self._filled = 0
+                self._next_index = k + 1
 
     def _compute_anchor_utc(self) -> datetime:
         """Derive the UTC timestamp of the very first sample delivered.
@@ -385,8 +426,10 @@ class RadiodIQSource:
             client_id="codar-sounder",
         )
         # A fresh channel means a fresh stream; any earlier anchor named
-        # labels that stream no longer produces.
+        # labels that stream no longer produces, and its sample count
+        # starts again at zero.
         self._anchor = None
+        self._reset_assembly()
         # Force F32LE (encoding=4) IQ.  ka9q-python's default (S16BE)
         # appears to deliver byte-swap-corrupted samples from this
         # ka9q-python / radiod combination — magnitudes come out as
@@ -423,54 +466,38 @@ class RadiodIQSource:
         )
         self._stream.start()
 
-        n_samples = self.cpi_n_samples
-        buf = np.empty(n_samples, dtype=np.complex64)
-        filled = 0
         anchor_utc: Optional[datetime] = None
-        cpi_index = 0
         try:
             while not self._stopped.is_set():
                 try:
-                    chunk = self._sample_queue.get(timeout=1.0)
+                    buf, k = self._cpi_queue.get(timeout=1.0)
                 except Exception:
                     continue                 # timeout — just check stopped flag
-                idx = 0
-                while idx < chunk.size:
-                    take = min(chunk.size - idx, n_samples - filled)
-                    buf[filled:filled + take] = chunk[idx:idx + take]
-                    filled += take
-                    idx += take
-                    if filled == n_samples:
-                        # Crash-safe keep-alive: if a finite lifetime was
-                        # configured, refresh it before yielding so the
-                        # channel survives the consumer's processing time.
-                        # Failure here (radiod restart, network blip) must
-                        # not crash the daemon — log and continue.
-                        if self.lifetime_frames is not None:
-                            try:
-                                self._control.set_channel_lifetime(
-                                    self._channel_info.ssrc,
-                                    int(self.lifetime_frames),
-                                )
-                            except Exception as exc:
-                                log.warning(
-                                    "RadiodIQSource: lifetime refresh failed: %s",
-                                    exc,
-                                )
-                        # Anchor (one-time): the first packet has set
-                        # self._anchor_first_rtp; derive the RTP-anchored
-                        # UTC of the first sample ever delivered, applying
-                        # hf-timestd's offset when available (§4.5).
-                        if anchor_utc is None:
-                            anchor_utc = self._compute_anchor_utc()
-                        # Sample-count projection — pure cadence math, no
-                        # wall-clock consulted per CPI.
-                        cpi_start_utc = anchor_utc + timedelta(
-                            seconds=cpi_index * self.cpi_seconds,
+                # Crash-safe keep-alive: if a finite lifetime was
+                # configured, refresh it before yielding so the
+                # channel survives the consumer's processing time.
+                # Failure here (radiod restart, network blip) must
+                # not crash the daemon — log and continue.
+                if self.lifetime_frames is not None:
+                    try:
+                        self._control.set_channel_lifetime(
+                            self._channel_info.ssrc,
+                            int(self.lifetime_frames),
                         )
-                        yield (buf.copy(), cpi_start_utc)
-                        cpi_index += 1
-                        filled = 0
+                    except Exception as exc:
+                        log.warning(
+                            "RadiodIQSource: lifetime refresh failed: %s",
+                            exc,
+                        )
+                # Anchor (one-time): the first packet has set
+                # self._anchor_first_rtp; derive the RTP-anchored
+                # UTC of the first sample ever delivered, applying
+                # hf-timestd's offset when available (§4.5).
+                if anchor_utc is None:
+                    anchor_utc = self._compute_anchor_utc()
+                # The CPI's own position in the stream, never a count of
+                # CPIs yielded: a dropped CPI shifts nothing after it.
+                yield (buf, anchor_utc + timedelta(seconds=k * self.cpi_seconds))
         finally:
             try:
                 self._stream.stop()

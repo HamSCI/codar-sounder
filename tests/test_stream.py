@@ -188,3 +188,125 @@ class TestAgcPolicy:
         kw = fake_control.ensure_channel.call_args.kwargs
         assert kw["agc_enable"] == 0
         assert kw["gain"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# CPI timing: each CPI is labelled by its true sample position.
+# W2NAF/B1A/SIGMA/AB4EJ, 2026-11-18: the callback dropped queue chunks while
+# the daemon processed a CPI, and CPIs were labelled anchor + yield_count *
+# cpi_seconds, so every drop made all later labels early (6-8 h after two
+# days).  CPIs now assemble in the callback, carry their sample index, and a
+# CPI the consumer cannot take is dropped whole; later labels stay true.
+# ---------------------------------------------------------------------------
+
+import itertools
+from datetime import datetime, timedelta, timezone
+
+import numpy as np
+
+ANCHOR = datetime(2026, 11, 18, 0, 0, 0, tzinfo=timezone.utc)
+
+
+def _small(**kw):
+    # 1000 Hz x 1 s CPIs keep the arrays tiny.
+    return _src(sample_rate_hz=1000, cpi_seconds=1.0, **kw)
+
+
+def _feed(src, n_samples, chunk=300, value=1.0):
+    q = SimpleNamespace(first_rtp_timestamp=5_000)
+    left = n_samples
+    while left > 0:
+        k = min(chunk, left)
+        src._on_samples(np.full(k, value, dtype=np.complex64), q)
+        left -= k
+
+
+def _iterate(src, n):
+    fake_ci = SimpleNamespace(ssrc=7, multicast_address="239.0.0.1", port=5004)
+    fake_control = mock.Mock()
+    fake_control.ensure_channel.return_value = fake_ci
+    with mock.patch.object(_stream_mod, "_ka9q_RadiodControl",
+                           return_value=fake_control, create=True), \
+         mock.patch.object(_stream_mod, "_ka9q_RadiodStream",
+                           return_value=mock.Mock(), create=True), \
+         mock.patch.object(type(src), "_compute_anchor_utc", return_value=ANCHOR):
+        return list(itertools.islice(iter(src), n))
+
+
+class TestCpiTiming:
+
+    def test_cpis_assemble_in_the_callback_with_their_index(self):
+        src = _small()
+        _feed(src, 2500)                          # 2.5 CPIs
+        got = [src._cpi_queue.get_nowait() for _ in range(src._cpi_queue.qsize())]
+        assert [k for _, k in got] == [0, 1]
+        assert all(buf.size == 1000 for buf, _ in got)
+        assert src._filled == 500                 # the third CPI is half full
+
+    def test_a_cpi_the_consumer_cannot_take_is_dropped_whole(self):
+        src = _small()
+        _feed(src, 1000 * (src.CPI_QUEUE_MAX + 2))
+        kept = [k for _, k in (src._cpi_queue.get_nowait()
+                               for _ in range(src._cpi_queue.qsize()))]
+        assert kept == list(range(src.CPI_QUEUE_MAX))
+        assert src.dropped_cpis == 2
+
+    def test_labels_follow_the_sample_index_across_a_drop(self):
+        src = _small()
+        _feed(src, 1000 * (src.CPI_QUEUE_MAX + 2))     # CPIs 0..Q-1 kept, Q and Q+1 dropped
+        # The consumer frees the queue; streaming goes on.
+        for _ in range(src._cpi_queue.qsize()):
+            src._cpi_queue.get_nowait()
+        _feed(src, 1000)                                # CPI Q+2
+        src._stopped.clear()
+        got = _iterate_prefilled(src, 1)
+        (_, t), = got
+        assert t == ANCHOR + timedelta(seconds=src.CPI_QUEUE_MAX + 2)
+
+    def test_labels_are_anchor_plus_index_times_cpi(self):
+        src = _small()
+        _feed(src, 3000)
+        got = _iterate_prefilled(src, 3)
+        assert [t for _, t in got] == [ANCHOR + timedelta(seconds=k) for k in range(3)]
+
+    def test_samples_are_still_sanitised(self):
+        src = _small()
+        q = SimpleNamespace(first_rtp_timestamp=5_000)
+        bad = np.full(1000, 1.0, dtype=np.complex64)
+        bad[3] = np.nan
+        bad[4] = 1e30
+        src._on_samples(bad, q)
+        buf, _ = src._cpi_queue.get_nowait()
+        assert buf[3] == 0 and buf[4] == 0 and np.all(np.isfinite(buf))
+
+    def test_reprovisioning_resets_the_assembly(self):
+        src = _small()
+        _feed(src, 1500)
+        src._stopped.set()
+        _iterate(src, 1)
+        assert src._filled == 0 and src._next_index == 0
+        assert src._anchor_first_rtp is None
+        assert src._cpi_queue.qsize() == 0
+
+
+def _iterate_prefilled(src, n):
+    """Iterate without re-provisioning wiping what the test fed: feed into a
+    fresh source's queue only after __iter__ has provisioned."""
+    fed = []
+    while src._cpi_queue.qsize():
+        fed.append(src._cpi_queue.get_nowait())
+    fake_ci = SimpleNamespace(ssrc=7, multicast_address="239.0.0.1", port=5004)
+    fake_control = mock.Mock()
+    fake_control.ensure_channel.return_value = fake_ci
+
+    def _stream(*a, **kw):
+        for item in fed:
+            src._cpi_queue.put_nowait(item)
+        return mock.Mock()
+
+    with mock.patch.object(_stream_mod, "_ka9q_RadiodControl",
+                           return_value=fake_control, create=True), \
+         mock.patch.object(_stream_mod, "_ka9q_RadiodStream",
+                           side_effect=_stream, create=True), \
+         mock.patch.object(type(src), "_compute_anchor_utc", return_value=ANCHOR):
+        return list(itertools.islice(iter(src), n))
