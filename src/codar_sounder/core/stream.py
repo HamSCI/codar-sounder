@@ -278,6 +278,11 @@ class RadiodIQSource:
     # Finished CPIs waiting for the consumer: three 60 s CPIs (~92 MB at
     # 64 kHz complex64) let one slow CPI's processing finish without a drop.
     CPI_QUEUE_MAX = 3
+    # A re-anchored epoch whose RTP-mapped anchor disagrees with the wall
+    # clock by more than this is refused, not published: after a radiod
+    # restart the mapping can name a dead session.
+    REANCHOR_TOLERANCE_S = 2.0
+    _wall = staticmethod(time.time)
 
     @property
     def cpi_n_samples(self) -> int:
@@ -296,7 +301,9 @@ class RadiodIQSource:
         self._epoch = 0
         self._epoch_rtp: Optional[int] = None
         self._epoch_count = 0
+        self._epoch_wall: Optional[float] = None   # wall time of the epoch's first sample
         self.rtp_discontinuities = 0
+        self.refused_epochs = 0
         while True:
             try:
                 self._cpi_queue.get_nowait()
@@ -344,7 +351,8 @@ class RadiodIQSource:
             first_rtp = getattr(quality, "first_rtp_timestamp", None)
             if first_rtp is not None:
                 self._anchor_first_rtp = int(first_rtp)
-        self._check_continuity(getattr(quality, "delivered_rtp_start", None))
+        self._check_continuity(getattr(quality, "delivered_rtp_start", None),
+                               len(samples) / self.sample_rate_hz)
         arr = np.asarray(samples, dtype=np.complex64)
         if not np.all(np.isfinite(arr)):
             arr = np.where(np.isfinite(arr), arr, np.complex64(0))
@@ -364,7 +372,7 @@ class RadiodIQSource:
                 k = self._next_index
                 try:
                     self._cpi_queue.put_nowait(
-                        (self._buf, k, self._epoch, self._epoch_rtp))
+                        (self._buf, k, self._epoch, self._epoch_rtp, self._epoch_wall))
                 except Exception:
                     # The consumer is a whole queue behind: drop this CPI.
                     # Its successors keep their true labels.
@@ -377,7 +385,7 @@ class RadiodIQSource:
                 self._filled = 0
                 self._next_index = k + 1
 
-    def _check_continuity(self, rtp0) -> None:
+    def _check_continuity(self, rtp0, batch_s: float = 0.0) -> None:
         """Compare a batch's first-sample RTP with the samples counted
         since the epoch began; on disagreement, start a new epoch.
 
@@ -392,11 +400,13 @@ class RadiodIQSource:
         if rtp0 is None:
             if self._epoch_rtp is None:
                 self._epoch_rtp = self._anchor_first_rtp
+                self._epoch_wall = self._wall() - batch_s
             return
         rtp0 = int(rtp0) & 0xFFFFFFFF
         if self._epoch_rtp is None:
             self._epoch_rtp = rtp0
             self._epoch_count = 0
+            self._epoch_wall = self._wall() - batch_s
             return
         if (rtp0 - self._epoch_rtp) & 0xFFFFFFFF == self._epoch_count & 0xFFFFFFFF:
             return
@@ -411,8 +421,43 @@ class RadiodIQSource:
         self._epoch += 1
         self._epoch_rtp = rtp0
         self._epoch_count = 0
+        self._epoch_wall = self._wall() - batch_s
         self._filled = 0
         self._next_index = 0
+
+    def _anchor_epoch(self, epoch: int, epoch_rtp: Optional[int],
+                      epoch_wall: Optional[float], *, reanchor: bool) -> Optional[datetime]:
+        """The anchor for one epoch's labels, or None to withhold them.
+
+        The first epoch anchors through the mapping provisioning just read.
+        A later epoch follows an RTP discontinuity, perhaps a radiod restart,
+        so the channel's status is read again first, and the anchor must
+        agree with the wall clock within REANCHOR_TOLERANCE_S, else the
+        epoch's CPIs are refused and counted in refused_epochs."""
+        behind = 0
+        if epoch_wall is not None:
+            behind = max(0, int(round((self._wall() - epoch_wall) * self.sample_rate_hz)))
+        if reanchor:
+            try:
+                self._channel_info = self._control.ensure_channel(**self._ensure_kwargs)
+            except Exception as exc:
+                log.error("RadiodIQSource: channel status re-read failed (%s); "
+                          "epoch %d refused", exc, epoch)
+                self.refused_epochs += 1
+                return None
+        anchor = self._compute_anchor_utc(first_rtp=epoch_rtp, samples_behind=behind)
+        if reanchor and epoch_wall is not None:
+            wall = datetime.fromtimestamp(epoch_wall, tz=timezone.utc)
+            off = (anchor - wall).total_seconds()
+            if abs(off) > self.REANCHOR_TOLERANCE_S:
+                self.refused_epochs += 1
+                log.error(
+                    "RadiodIQSource: epoch %d anchor %s disagrees with the wall "
+                    "clock by %+.3f s (tolerance %.1f s); its CPIs are refused "
+                    "(%d refused epochs)", epoch, anchor.isoformat(), off,
+                    self.REANCHOR_TOLERANCE_S, self.refused_epochs)
+                return None
+        return anchor
 
     def _compute_anchor_utc(self, first_rtp: Optional[int] = None,
                             samples_behind: int = 0) -> datetime:
@@ -504,6 +549,7 @@ class RadiodIQSource:
         # the keep-alive feature would reject the unknown kwarg.
         if self.lifetime_frames is not None:
             ensure_kwargs["lifetime"] = int(self.lifetime_frames)
+        self._ensure_kwargs = ensure_kwargs
         self._channel_info = self._control.ensure_channel(**ensure_kwargs)
         log.info(
             "RadiodIQSource: channel ready: ssrc=%s mcast=%s:%d lifetime=%s",
@@ -525,7 +571,7 @@ class RadiodIQSource:
         try:
             while not self._stopped.is_set():
                 try:
-                    buf, k, epoch, epoch_rtp = self._cpi_queue.get(timeout=1.0)
+                    buf, k, epoch, epoch_rtp, epoch_wall = self._cpi_queue.get(timeout=1.0)
                 except Exception:
                     continue                 # timeout — just check stopped flag
                 # Crash-safe keep-alive: if a finite lifetime was
@@ -549,10 +595,11 @@ class RadiodIQSource:
                 # UTC of the first sample ever delivered, applying
                 # hf-timestd's offset when available (§4.5).
                 if anchor_epoch != epoch:
-                    behind = self._epoch_count if epoch == self._epoch else 0
-                    anchor_utc = self._compute_anchor_utc(
-                        first_rtp=epoch_rtp, samples_behind=behind)
+                    anchor_utc = self._anchor_epoch(
+                        epoch, epoch_rtp, epoch_wall, reanchor=anchor_epoch is not None)
                     anchor_epoch = epoch
+                if anchor_utc is None:
+                    continue                 # refused epoch: withhold, never mislabel
                 # The CPI's own position in the stream, never a count of
                 # CPIs yielded: a dropped CPI shifts nothing after it.
                 # Samples, not cpi_seconds, so a rate x CPI that is not an

@@ -250,14 +250,14 @@ class TestCpiTiming:
         src = _small()
         _feed(src, 2500)                          # 2.5 CPIs
         got = [src._cpi_queue.get_nowait() for _ in range(src._cpi_queue.qsize())]
-        assert [k for _, k, _, _ in got] == [0, 1]
+        assert [k for _, k, *_ in got] == [0, 1]
         assert all(buf.size == 1000 for buf, *_ in got)
         assert src._filled == 500                 # the third CPI is half full
 
     def test_a_cpi_the_consumer_cannot_take_is_dropped_whole(self):
         src = _small()
         _feed(src, 1000 * (src.CPI_QUEUE_MAX + 2))
-        kept = [k for _, k, _, _ in (src._cpi_queue.get_nowait()
+        kept = [k for _, k, *_ in (src._cpi_queue.get_nowait()
                                for _ in range(src._cpi_queue.qsize()))]
         assert kept == list(range(src.CPI_QUEUE_MAX))
         assert src.dropped_cpis == 2
@@ -329,7 +329,7 @@ class TestCpiContentAndContinuity:
         src = _small()
         _feed(src, 3000, chunk=377)               # chunks straddle CPI edges
         for _ in range(3):
-            buf, k, _, _ = src._cpi_queue.get_nowait()
+            buf, k, *_ = src._cpi_queue.get_nowait()
             assert np.array_equal(buf.real, np.arange(k * 1000, (k + 1) * 1000) % 97)
 
     def test_continuous_rtp_keeps_one_epoch(self):
@@ -348,11 +348,13 @@ class TestCpiContentAndContinuity:
         src._on_samples(np.zeros(1000, dtype=np.complex64), q)
         assert src.rtp_discontinuities == 1
         items = [src._cpi_queue.get_nowait() for _ in range(src._cpi_queue.qsize())]
-        assert [(k, e) for _, k, e, _ in items] == [(0, 0), (0, 1)]
+        assert [(k, e) for _, k, e, *_ in items] == [(0, 0), (0, 1)]
         assert items[1][3] == 9_000 + 1500 + 20_000      # the new epoch's anchor RTP
 
     def test_a_new_epoch_labels_from_its_own_anchor(self):
         src = _small()
+        later_ts = (ANCHOR + timedelta(hours=1)).timestamp()
+        src._wall = lambda: later_ts + 0.5        # the re-anchor agrees with the wall clock
         _feed(src, 1000, rtp=9_000)
         q = SimpleNamespace(first_rtp_timestamp=5_000, delivered_rtp_start=50_000)
         src._on_samples(np.zeros(2000, dtype=np.complex64), q)
@@ -394,4 +396,46 @@ class TestCpiContentAndContinuity:
         _feed(src, 3000)
         got = _iterate_prefilled(src, 3)
         assert got[2][1] == ANCHOR + timedelta(seconds=2 * 1000 / 1000.5)
+
+    def test_a_reanchor_far_from_the_wall_clock_is_refused(self):
+        src = _small()
+        src._wall = lambda: (ANCHOR + timedelta(hours=1)).timestamp()
+        _feed(src, 1000, rtp=9_000)
+        q = SimpleNamespace(first_rtp_timestamp=5_000, delivered_rtp_start=50_000)
+        src._on_samples(np.zeros(2000, dtype=np.complex64), q)
+        # The stale mapping names the dead session: 3 h away from the wall clock.
+        anchors = {9_000: ANCHOR, 50_000: ANCHOR - timedelta(hours=2)}
+        fed = [src._cpi_queue.get_nowait() for _ in range(src._cpi_queue.qsize())]
+        fake_ci = SimpleNamespace(ssrc=7, multicast_address="239.0.0.1", port=5004)
+        fake_control = mock.Mock()
+        fake_control.ensure_channel.return_value = fake_ci
+
+        def _stream(*a, **kw):
+            for item in fed:
+                src._cpi_queue.put_nowait(item)
+            return mock.Mock()
+
+        with mock.patch.object(_stream_mod, "_ka9q_RadiodControl",
+                               return_value=fake_control, create=True), \
+             mock.patch.object(_stream_mod, "_ka9q_RadiodStream",
+                               side_effect=_stream, create=True), \
+             mock.patch.object(type(src), "_compute_anchor_utc",
+                               side_effect=lambda first_rtp=None, samples_behind=0: anchors[first_rtp]):
+            # Once the queue runs dry, stop: epoch 1's CPIs are refused, so
+            # the generator would otherwise wait for more.
+            real_get = src._cpi_queue.get
+
+            def get(timeout=None):
+                if src._cpi_queue.qsize() == 0:
+                    src._stopped.set()
+                    raise Exception("empty")
+                return real_get(timeout=timeout)
+            src._cpi_queue.get = get
+            got = list(iter(src))
+            first, rest = got[0], got[1:]
+        assert first[1] == ANCHOR
+        assert rest == []
+        assert src.refused_epochs == 1
+        # The channel status was read again before re-anchoring.
+        assert fake_control.ensure_channel.call_count == 2
 
