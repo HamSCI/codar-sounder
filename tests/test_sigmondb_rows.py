@@ -161,3 +161,66 @@ def test_the_phase_store_prunes_days_past_its_keep(tmp_path):
     old.write_text("{}\n")
     store.prune(today=datetime(2026, 11, 12, tzinfo=timezone.utc).date())
     assert not old.exists()
+
+
+def _daemon_with_fake_emitter(tmp_path):
+    from codar_sounder.core import daemon as daemon_mod
+
+    class FakeEmitter:
+        active = True
+        def __init__(self):
+            self.calls = []
+        def emit(self, **kw):
+            self.calls.append(kw)
+        def close(self):
+            pass
+
+    tx = {"id": "DUCK", "center_freq_hz": 4_537_180, "sweep_rate_hz_per_s": -25733.913,
+          "sweep_bw_hz": 25734, "sweep_repetition_hz": 1.0, "tx_lat_deg": 36.18,
+          "tx_lon_deg": -75.75, "tdma_offset_samples": 0}
+    block = {"status": "kfs-status.local", "channel_name": "codar-4537khz",
+             "transmitter": [tx]}
+    config = {"station": {"callsign": "KFS", "receiver_lat": 37.39, "receiver_lon": -122.41},
+              "paths": {"output_dir": str(tmp_path)},
+              "processing": {"coherent_seconds": 1, "sample_rate_hz": 64000,
+                             "force_synthetic": True},
+              "radiod": [block]}
+    em = FakeEmitter()
+    return daemon_mod.SounderDaemon(config, block, sink_writer=None,
+                                    sigmondb_emitter=em, supervised=True), em
+
+
+def test_the_hook_emits_the_anchor_of_its_own_cpi_not_the_sources_latest(tmp_path):
+    """Each CPI's rows ride the anchor that labelled that CPI (AC0G-ND,
+    2026-11-19), never whatever the source holds by the time rows emit."""
+    d, em = _daemon_with_fake_emitter(tmp_path)
+    from types import SimpleNamespace
+    d.iq_source = SimpleNamespace(anchor="the source's newer anchor")
+    d.pipelines[0].sigmondb_hook("result", "start", "this CPI's anchor")
+    assert em.calls[0]["anchor"] == "this CPI's anchor"
+
+
+def test_the_run_loop_carries_each_yielded_anchor_to_its_cpi(tmp_path, monkeypatch):
+    from codar_sounder.core import daemon as daemon_mod
+    d, _ = _daemon_with_fake_emitter(tmp_path)
+    t0 = datetime(2026, 11, 19, 19, 11, tzinfo=timezone.utc)
+    d.iq_source = [(np.zeros(4, np.complex64), t0, "A0"),
+                   (np.zeros(4, np.complex64), t0, "A1")]
+    seen = []
+    monkeypatch.setattr(daemon_mod._TransmitterPipeline, "process_cpi",
+                        lambda self, rx, utc, anchor=None: seen.append(anchor))
+    d.run()
+    assert seen == ["A0", "A1"]
+
+
+def test_a_source_yielding_pairs_still_runs(tmp_path, monkeypatch):
+    """The synthetic source yields (samples, utc); its CPIs carry no anchor."""
+    from codar_sounder.core import daemon as daemon_mod
+    d, _ = _daemon_with_fake_emitter(tmp_path)
+    t0 = datetime(2026, 11, 19, 19, 11, tzinfo=timezone.utc)
+    d.iq_source = [(np.zeros(4, np.complex64), t0)]
+    seen = []
+    monkeypatch.setattr(daemon_mod._TransmitterPipeline, "process_cpi",
+                        lambda self, rx, utc, anchor=None: seen.append(anchor))
+    d.run()
+    assert seen == [None]

@@ -195,7 +195,7 @@ def fake_sources(monkeypatch):
 
     processed: list[tuple[str, int]] = []
 
-    def _process(self, rx_samples, cpi_start_utc):
+    def _process(self, rx_samples, cpi_start_utc, anchor=None):
         processed.append((self.station_id, self.center_freq_hz))
         return None
 

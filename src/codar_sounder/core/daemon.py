@@ -178,7 +178,8 @@ class _TransmitterPipeline:
             self.group_range_uncertainty_km, self.tdma_offset_samples,
         )
 
-    def process_cpi(self, rx_samples, cpi_start_utc: datetime) -> Optional[Path]:
+    def process_cpi(self, rx_samples, cpi_start_utc: datetime,
+                    anchor=None) -> Optional[Path]:
         """Run one CPI through dechirp → trace → invert → write.
 
         Emits one JSONL record per detected peak (high-ray, low-ray,
@@ -186,6 +187,9 @@ class _TransmitterPipeline:
         path of the most-recent write (if any peak was successfully
         recorded), else ``None``.  Never raises — per-CPI failures are
         logged and swallowed so the daemon can keep running.
+
+        ``anchor`` is the AnchorUTC that labelled THIS CPI; its rows carry
+        that anchor's T-level, never a newer or older one.
         """
         try:
             result = dechirp(
@@ -200,7 +204,7 @@ class _TransmitterPipeline:
             return None
 
         if self.sigmondb_hook is not None:
-            self.sigmondb_hook(result, cpi_start_utc)
+            self.sigmondb_hook(result, cpi_start_utc, anchor)
 
         ranges_km, profile = positive_range_window(result, range_profile(result))
 
@@ -696,13 +700,18 @@ class SounderDaemon:
             self._write_applied_state()
 
         try:
-            for cpi_samples, cpi_start_utc in self.iq_source:
+            for item in self.iq_source:
                 if self._stopped.is_set():
                     break
+                # RadiodIQSource yields (samples, utc, anchor): the anchor
+                # that labelled this CPI travels with it.  The synthetic
+                # source yields (samples, utc) and has no anchor.
+                cpi_samples, cpi_start_utc = item[0], item[1]
+                cpi_anchor = item[2] if len(item) > 2 else None
                 # Fan out: every transmitter sees the same IQ; each
                 # dechirps with its own sweep params, finds its own peak.
                 for pipeline in self.pipelines:
-                    pipeline.process_cpi(cpi_samples, cpi_start_utc)
+                    pipeline.process_cpi(cpi_samples, cpi_start_utc, cpi_anchor)
                 if on_cpi is not None:
                     on_cpi()
                 if not self.supervised:
@@ -753,11 +762,11 @@ class SounderDaemon:
         tdma = int(tx.get("tdma_offset_samples", 0))
         period = 1.0 / float(tx["sweep_repetition_hz"])
 
-        def hook(result, cpi_start_utc):
+        def hook(result, cpi_start_utc, anchor=None):
             emitter.emit(result=result, cpi_start_utc=cpi_start_utc,
                          tdma_offset_samples=tdma, centre_hz=centre, period_s=period,
                          expected=expected, duration_s=self.coherent_seconds,
-                         anchor=getattr(self.iq_source, "anchor", None),
+                         anchor=anchor,
                          radiod=self.radiod_id)
         return hook
 

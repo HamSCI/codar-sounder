@@ -271,14 +271,14 @@ class TestCpiTiming:
         _feed(src, 1000)                                # CPI Q+2
         src._stopped.clear()
         got = _iterate_prefilled(src, 1)
-        (_, t), = got
+        (_, t, _a), = got
         assert t == ANCHOR + timedelta(seconds=src.CPI_QUEUE_MAX + 2)
 
     def test_labels_are_anchor_plus_index_times_cpi(self):
         src = _small()
         _feed(src, 3000)
         got = _iterate_prefilled(src, 3)
-        assert [t for _, t in got] == [ANCHOR + timedelta(seconds=k) for k in range(3)]
+        assert [t for _, t, _a in got] == [ANCHOR + timedelta(seconds=k) for k in range(3)]
 
     def test_samples_are_still_sanitised(self):
         src = _small()
@@ -377,7 +377,7 @@ class TestCpiContentAndContinuity:
              mock.patch.object(type(src), "_compute_anchor_utc",
                                side_effect=lambda first_rtp=None, samples_behind=0: anchors[first_rtp]):
             got = list(itertools.islice(iter(src), 3))
-        assert [t for _, t in got] == [ANCHOR, later, later + timedelta(seconds=1)]
+        assert [t for _, t, _a in got] == [ANCHOR, later, later + timedelta(seconds=1)]
 
     def test_rtp_wrap_is_not_a_discontinuity(self):
         src = _small()
@@ -439,3 +439,141 @@ class TestCpiContentAndContinuity:
         # The channel status was read again before re-anchoring.
         assert fake_control.ensure_channel.call_count == 2
 
+
+
+# ---------------------------------------------------------------------------
+# Each CPI's label and T-level come from the authority as it stands when
+# that CPI is labelled.  AC0G-ND, 2026-11-19: the one anchor per epoch was
+# taken while hf-timestd read T4, and every row for days after carried T4
+# and the T4 offset, though the authority had read T6 since.  The epoch's
+# RTP stays fixed; each CPI re-pins it with a fresh authority read.
+# ---------------------------------------------------------------------------
+
+from codar_sounder.core.sigmondb import anchor_t_level
+
+RTP_UTC = 1_763_424_000.0          # what the fake rtp_to_utc maps the epoch RTP to
+
+
+class _Snap:
+    def __init__(self, level, offset_ns, usable=True):
+        self.t_level_active = level
+        self.rtp_to_utc_offset_ns = offset_ns
+        self.offset_seconds = offset_ns / 1e9
+        self.offset_usable = usable
+        self.sigma_ns = 100
+        self.governor_radiod = "rx-status.local"
+        self.utc_published = None
+        self.host_clock = None
+
+
+class _SeqReader:
+    """Reads the snapshots in order; the last one repeats."""
+    def __init__(self, *snaps):
+        self.snaps = list(snaps)
+        self.reads = 0
+
+    def read(self):
+        s = self.snaps[min(self.reads, len(self.snaps) - 1)]
+        self.reads += 1
+        return s
+
+
+def _iterate_live(src, n, rtp_to_utc):
+    """Iterate through the real anchor path (acquire_anchor_utc), with
+    ka9q.rtp_to_utc faked."""
+    fed = []
+    while src._cpi_queue.qsize():
+        fed.append(src._cpi_queue.get_nowait())
+    fake_ci = SimpleNamespace(ssrc=7, multicast_address="239.0.0.1", port=5004)
+    fake_control = mock.Mock()
+    fake_control.ensure_channel.return_value = fake_ci
+
+    def _stream(*a, **kw):
+        for item in fed:
+            src._cpi_queue.put_nowait(item)
+        return mock.Mock()
+
+    with mock.patch.object(_stream_mod, "_ka9q_RadiodControl",
+                           return_value=fake_control, create=True), \
+         mock.patch.object(_stream_mod, "_ka9q_RadiodStream",
+                           side_effect=_stream, create=True), \
+         mock.patch("ka9q.rtp_to_utc", side_effect=rtp_to_utc):
+        return list(itertools.islice(iter(src), n))
+
+
+def _fixed_map(rtp, channel_info, wallclock_hint_sec=None):
+    assert rtp == 9_000
+    return RTP_UTC
+
+
+class TestPerCpiAnchor:
+
+    def test_t4_at_epoch_start_then_t6_later_cpis_carry_t6(self):
+        src = _small(authority_reader=_SeqReader(_Snap("T4", 2_000_000),
+                                                 _Snap("T6", 4_500_000)))
+        _feed(src, 3000, rtp=9_000)
+        got = _iterate_live(src, 3, _fixed_map)
+        levels = [anchor_t_level(a) for _, _, a in got]
+        assert levels == ["T4", "T6", "T6"]
+        labels = [t.timestamp() for _, t, _ in got]
+        assert labels[0] == pytest.approx(RTP_UTC + 0.002, abs=1e-6)
+        # Later labels shift by the offset difference (+2.5 ms).
+        assert labels[1] == pytest.approx(RTP_UTC + 0.0045 + 1, abs=1e-6)
+        assert labels[2] == pytest.approx(RTP_UTC + 0.0045 + 2, abs=1e-6)
+        assert src.anchor is got[-1][2]          # the §3 report rides the latest CPI
+
+    def test_t6_then_t2_later_cpis_lose_t6(self):
+        from hamsci_dsp import sigmondb_rows as sr
+        src = _small(authority_reader=_SeqReader(_Snap("T6", 4_500_000),
+                                                 _Snap("T2", 1_000_000)))
+        _feed(src, 2000, rtp=9_000)
+        got = _iterate_live(src, 2, _fixed_map)
+        assert [anchor_t_level(a) for _, _, a in got] == ["T6", "T2"]
+        assert sr.provenance(anchor_t_level(got[1][2])) != sr.provenance("T6")
+
+    def test_the_repin_wrap_hint_is_the_epoch_anchor_not_now(self):
+        hints = []
+
+        def _map(rtp, channel_info, wallclock_hint_sec=None):
+            hints.append(wallclock_hint_sec)
+            return RTP_UTC
+
+        src = _small(authority_reader=_SeqReader(_Snap("T6", 4_500_000)))
+        src._wall = lambda: RTP_UTC + 3 * 86400.0     # days of uptime later
+        _feed(src, 3000, rtp=9_000)
+        with mock.patch("hamsci_dsp.timing.time.time", return_value=RTP_UTC + 3 * 86400.0):
+            _iterate_live(src, 3, _map)
+        # The first call anchors the epoch (hint "now"); each re-pin after
+        # it must hint the epoch anchor's own instant.
+        assert len(hints) == 3
+        assert hints[1:] == [pytest.approx(RTP_UTC + 0.0045, abs=1e-6)] * 2
+
+    def test_a_repin_that_is_not_rtp_referenced_falls_back_to_the_epoch_label(self):
+        calls = []
+
+        def _map(rtp, channel_info, wallclock_hint_sec=None):
+            calls.append(rtp)
+            return RTP_UTC if len(calls) == 1 else None
+
+        src = _small(authority_reader=_SeqReader(_Snap("T4", 2_000_000),
+                                                 _Snap("T6", 4_500_000)))
+        _feed(src, 2000, rtp=9_000)
+        got = _iterate_live(src, 2, _map)
+        (_, t1, a1) = got[1]
+        assert t1.timestamp() == pytest.approx(RTP_UTC + 0.002 + 1, abs=1e-6)
+        assert anchor_t_level(a1) is None
+
+    def test_a_repin_that_raises_falls_back_without_raising(self):
+        calls = []
+
+        def _map(rtp, channel_info, wallclock_hint_sec=None):
+            calls.append(rtp)
+            if len(calls) > 1:
+                raise RuntimeError("mapping gone")
+            return RTP_UTC
+
+        src = _small(authority_reader=_SeqReader(_Snap("T6", 4_500_000)))
+        _feed(src, 2000, rtp=9_000)
+        got = _iterate_live(src, 2, _map)
+        assert got[1][1].timestamp() == pytest.approx(RTP_UTC + 0.0045 + 1, abs=1e-6)
+        assert anchor_t_level(got[1][2]) is None

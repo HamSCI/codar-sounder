@@ -272,7 +272,13 @@ class RadiodIQSource:
         # §18.5: the report describes the labels, so it comes from the
         # anchor that produced them, never from a fresh authority read).
         # None until the first CPI; reset when __iter__ re-provisions.
+        # Each CPI re-pins the epoch's RTP, so this holds the latest CPI's
+        # anchor; the CPI's own anchor travels with it out of __iter__.
         self._anchor: Optional["AnchorUTC"] = None
+        # The anchor the current epoch took first (the re-pins' wrap hint
+        # and their fallback), and the T-level the last CPI carried.
+        self._epoch_anchor: Optional["AnchorUTC"] = None
+        self._cpi_level: Optional[str] = None
         self._import_ka9q()                  # raises ModuleNotFoundError if missing
 
     # Finished CPIs waiting for the consumer: three 60 s CPIs (~92 MB at
@@ -470,7 +476,8 @@ class RadiodIQSource:
         the §4.5 RTP-reference invariant in concrete form: time is
         hf-timestd's product, the client just consumes it.  codar anchors
         the FIRST delivered sample (samples_behind=0) — it does not align to
-        a UTC cadence grid; CPI frames free-run off this single anchor.
+        a UTC cadence grid.  This is the epoch's first anchor; each later
+        CPI re-pins the same RTP with a fresh authority read (_repin).
 
         If the first RTP timestamp wasn't captured (no packet ever
         arrived — extremely unlikely by the time we're computing this)
@@ -502,9 +509,69 @@ class RadiodIQSource:
             a.offset_seconds,
         )
         self._anchor = a
+        self._epoch_anchor = a
         return a.datetime
 
-    def __iter__(self) -> Iterator[Tuple[np.ndarray, datetime]]:
+    def _repin(self, epoch_rtp: Optional[int], epoch_utc: datetime,
+               epoch_anchor) -> Tuple[object, datetime]:
+        """Re-pin the epoch's FIXED RTP with a fresh authority read; return
+        (the CPI's AnchorUTC, the UTC of the epoch's first sample).
+
+        The timing authority may change level at any time (T4 at a restart,
+        T6 eight minutes later), and each CPI's label and T-level must say
+        what it reads when that CPI is labelled.  AC0G-ND 2026-11-19: one
+        anchor per epoch, taken on T4, labelled days of CPIs with the T4
+        offset and kept every row off ``t6_anchor``.
+
+        The wrap hint is the epoch anchor's own instant, never "now": the
+        RTP ages, and a "now" hint past P/2 of uptime picks the wrong wrap
+        (AC0G-B4 2026-09-08, +99.42 h).  If the re-pin is not
+        RTP-referenced, the CPI keeps the epoch anchor's label and its
+        anchor is marked not RTP-referenced, so its rows carry no T-level.
+        """
+        from dataclasses import replace
+        from hamsci_dsp.timing import acquire_anchor_utc
+
+        a = None
+        try:
+            from ka9q import rtp_to_utc  # type: ignore
+            a = acquire_anchor_utc(
+                first_rtp=epoch_rtp if epoch_rtp is not None else self._anchor_first_rtp,
+                channel_info=self._channel_info,
+                rtp_to_utc=rtp_to_utc,
+                authority_reader=self._authority_reader,
+                sample_rate=int(self.sample_rate_hz),
+                anchor_hint_utc=epoch_utc.timestamp(),
+            )
+        except Exception as exc:  # noqa: BLE001 — never crash the RX path
+            log.warning("RadiodIQSource: CPI re-pin failed (%s); the CPI keeps "
+                        "the epoch anchor's label", exc)
+        if a is not None and a.rtp_referenced:
+            return a, a.datetime
+        fallback = (replace(epoch_anchor, rtp_referenced=False)
+                    if epoch_anchor is not None else None)
+        return fallback, epoch_utc
+
+    def _note_cpi_anchor(self, k: int, a) -> None:
+        """DEBUG per CPI; INFO only when the T-level the rows carry changes."""
+        snap = getattr(a, "snapshot", None)
+        usable = (a is not None and a.rtp_referenced and snap is not None
+                  and getattr(snap, "offset_usable", False))
+        level = getattr(snap, "t_level_active", None) if usable else None
+        log.debug("RadiodIQSource: CPI %d anchor %s (source=%s, t_level=%s)",
+                  k, a.datetime.isoformat() if a is not None else None,
+                  getattr(a, "source", None), level)
+        if level != self._cpi_level:
+            log.info("RadiodIQSource: CPI %d timing level %s -> %s (source=%s, "
+                     "offset=%+.6fs)", k, self._cpi_level, level,
+                     getattr(a, "source", None),
+                     getattr(a, "offset_seconds", 0.0) if a is not None else 0.0)
+            self._cpi_level = level
+
+    def __iter__(self) -> Iterator[Tuple[np.ndarray, datetime, object]]:
+        """Yield (samples, start UTC, AnchorUTC) per CPI.  The anchor is
+        the one that labelled THIS CPI; the daemon stamps its rows with
+        that anchor's T-level."""
         log.info(
             "RadiodIQSource: provisioning channel on %s freq=%d Hz "
             "preset=%s sample_rate=%d Hz encoding=F32LE filter=[%.0f,%.0f] Hz",
@@ -527,6 +594,8 @@ class RadiodIQSource:
         # labels that stream no longer produces, and its sample count
         # starts again at zero.
         self._anchor = None
+        self._epoch_anchor = None
+        self._cpi_level = None
         self._reset_assembly()
         # Force F32LE (encoding=4) IQ.  ka9q-python's default (S16BE)
         # appears to deliver byte-swap-corrupted samples from this
@@ -567,6 +636,7 @@ class RadiodIQSource:
 
         anchor_epoch: Optional[int] = None
         anchor_utc: Optional[datetime] = None
+        epoch_anchor = None
         n = self.cpi_n_samples
         try:
             while not self._stopped.is_set():
@@ -594,18 +664,32 @@ class RadiodIQSource:
                 # self._anchor_first_rtp; derive the RTP-anchored
                 # UTC of the first sample ever delivered, applying
                 # hf-timestd's offset when available (§4.5).
-                if anchor_epoch != epoch:
+                fresh = anchor_epoch != epoch
+                if fresh:
+                    self._epoch_anchor = None
                     anchor_utc = self._anchor_epoch(
                         epoch, epoch_rtp, epoch_wall, reanchor=anchor_epoch is not None)
                     anchor_epoch = epoch
+                    epoch_anchor = self._epoch_anchor if anchor_utc is not None else None
                 if anchor_utc is None:
                     continue                 # refused epoch: withhold, never mislabel
+                # The epoch's first CPI rides the anchor just taken; each
+                # later one re-pins the epoch's fixed RTP with a fresh
+                # authority read, so its label and T-level follow the
+                # authority as it stands now.
+                if fresh:
+                    cpi_anchor, base = epoch_anchor, anchor_utc
+                else:
+                    cpi_anchor, base = self._repin(epoch_rtp, anchor_utc, epoch_anchor)
+                    if cpi_anchor is not None:
+                        self._anchor = cpi_anchor    # the §3 report: latest CPI
+                self._note_cpi_anchor(k, cpi_anchor)
                 # The CPI's own position in the stream, never a count of
                 # CPIs yielded: a dropped CPI shifts nothing after it.
                 # Samples, not cpi_seconds, so a rate x CPI that is not an
                 # integer cannot drift.
-                yield (buf, anchor_utc + timedelta(
-                    seconds=k * n / self.sample_rate_hz))
+                yield (buf, base + timedelta(
+                    seconds=k * n / self.sample_rate_hz), cpi_anchor)
         finally:
             try:
                 self._stream.stop()
